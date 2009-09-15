@@ -1,0 +1,229 @@
+Remuco - Remote media player control
+
+Remuco is a duplex remote control system for Linux media players and mobile
+devices equipped with Bluetooth or WiFi. With Remuco, you can remotely control
+your favorite media player. You can switch to the next, previous, or any other
+media within the current playlist, browse your media library and activate other
+playlists, rate your media, adjust volume, and more. On the mobile device (the
+remote control), it displays information about the current media, including
+cover art.
+
+Getting Started : http://remuco.sourceforge.net/index.php/Getting_Started
+Features        : http://remuco.sourceforge.net/index.php/Features
+Screenshots     : http://remuco.sourceforge.net/index.php/Screenshots
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Table of Contents
+
+1. Requirements
+2. Installation
+3. Usage
+4. Player Adapter Development
+5. Client Development
+6. Packager Information
+A. General Information
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Requirements
+
+General:
+ * Python >= 2.5 and < 3.0
+ * Python modules: dbus, gobject, xdg, Image, logging, bluetooth
+
+Amarok:
+ * Amarok >= 2.0
+
+Audacious:
+ * Audacious >= 1.5.1 (previous versions may work, not tested)
+
+Banshee:
+ * Banshee >= 1.4
+
+Exaile:
+ * Exaile >= 2.99.3 (aka 3 alpha)
+
+MPD:
+ * MPD >= 0.13.2
+ * Python modules: mpd (>= 0.2)
+
+Rhythmbox:
+ * Rhythmbox >= 0.11.5
+ * Python modules: gconf
+ 
+Totem:
+ * Totem >= 2.22
+
+TVtime:
+ * TVtime >= 0.9.11
+
+VLC:
+ * VLC >= 0.9
+ * If not enabled by default, VLC needs to be started with DBus control:
+   $ vlc --control dbus
+
+XMMS2:
+ * Python modules: xmmsclient (>= 0.5)
+
+Client:
+ The client runs on mobile devices with this JavaME configurations:
+ * MIDP >= 2.0
+ * CLDC >= 1.1
+ * JSR-82 (not needed for WiFi mode)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+2. Installation
+
+Run
+
+ $ make help
+ 
+to get instructions on how to install Remuco for one or more media players.
+
+Next, install the client application on your mobile device. You find the
+required JAR and JAD files in the directory 'client/app'.
+How to install is device dependent - please consult the documentation of your
+mobile device.
+
+Note: If you installed Remuco using packages for your distribution, the client
+      files are either located in /usr/share/remuco/client/ or need to get
+      downloaded manually:
+      http://downloads.sourceforge.net/remuco/remuco-0.9.2.tar.gz
+      Make sure client and server versions match! 
+
+Note: The source only package (remuco-source-x.x.x.tar.gz) does not contain
+      the client binaries. Read sections "Client Development" and
+      "Packager Information" for how to build the client.
+
+Note: If the client fails to start on your mobile, have a look at
+      http://remuco.sourceforge.net/index.php/Client_Customization
+      for possible reasons and solutions.
+
+For more information visit:
+http://remuco.sourceforge.net/index.php/Getting_Started
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+3. Usage
+
+3.1 Player Adapters
+
+Some player adapters need to get started manually, others get started
+automatically when the corresponding player application starts. Please visit
+http://remuco.sourceforge.net/index.php/Getting_Started for player specific
+information.
+
+Each player adapter has a configuration file ~/.config/remuco/<PLAYER>/conf.
+Edit this file if needed. Logging output of a player adapter goes to
+~/.cache/remuco/<PLAYER>/log.
+
+3.2 Client
+
+Using the client is not too complicated, just start and use it ;) .
+
+Nevertheless, you'll find some usage information here:
+http://remuco.sourceforge.net/index.php/Getting_Started
+
+3.3 Report
+
+Remuco comes with a tool called remuco-report. This tool submits information
+of seen Remuco client devices to remuco.sf.net. Help setting up a Remuco
+compatible device list, by using remuco-report! See the tool's man page for
+more information.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+4. Player Adapter Development
+
+To develop a player adapter, use 'fooplay' as a template and implement it as
+described in the file 'api.html'.
+
+To test the fooplay adapter, simply run it as a Python script. It requires the
+Python module 'remuco' which is available if you installed another player
+adapter before. Otherwise, just add '<pkg-root>/base/module' to PYTHONPATH
+before running the fooplay adapter. For instance
+
+$ PYTHONPATH=<pkg-root>/base/module <pkg-root>/adapter/fooplay/remuco-fooplay
+
+starts the fooplay adapter without installing anything. Try it, it's easy :)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+5. Client Development
+
+As a quick start, change into the directory <pkg-root>/client and run setup.sh
+to set up the client build environment and to get further instructions.
+
+More detailed information can be found at:
+http://remuco.sourceforge.net/index.php/Client_Customization
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+6. Packager Information
+
+Packagers should not use the top level make file -- this is a wrapper around
+'setup.py'. Instead use setup.py directly, which installs all Remuco components
+(base, player adapters and client binaries) by default. To install only some
+components, the environment variable REMUCO_COMPONENTS may be set appropriately.
+Additionally some more environment variables may be used to adjust the
+installation process. Just search for 'os.getenv' within setup.py to get more
+detailed information.
+
+If your distribution requires source only packages, use the package
+remuco-source-x.x.x.tar.gz. Building the client requires Ant (including
+optional tasks), ProGuard and JavaME libraries. You can use JavaME libraries
+from SUN's Wireless Toolkit, from the MicroEmu project or generate them from
+scratch as described in client/ligben/README.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+A. General Information
+
+The Remuco project is hosted on SourceForge at http://remuco.sourceforge.net.
+It is licensed under the GPLv3 or any newer version.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+A.1. Feedback, Help, Bugs, Discussion etc.
+
+You can get support and help at the help forum:
+http://sourceforge.net/forum/forum.php?forum_id=568227
+
+To file bugs please visit the bug tracker:
+http://sourceforge.net/tracker/?group_id=166515&atid=839315
+
+If you miss a nice feature, take a look at the feature request tracker:
+http://sourceforge.net/tracker/?func=browse&group_id=166515&atid=839318
+
+If you need help on development issues, mainly concerning player adapter
+development, visit the developer forum:
+http://sourceforge.net/forum/forum.php?forum_id=568228
+
+For all other things to talk about, use the discussion forum:
+http://sourceforge.net/forum/forum.php?forum_id=568226
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+A.2. SVN
+
+Remuco's SVN root is:
+https://remuco.svn.sourceforge.net/svnroot/remuco
+
+To browse the SVN repository visit:
+http://remuco.svn.sourceforge.net/viewvc/remuco
+
+The most current code is located in "trunk". Note that this code is not always
+stable or in a working state. The sources of specific releases are located in
+"tags" -- getting code from "tags" ensures to have working code.
+
+Example A-1. Check out the current development version into the
+directory remuco-trunk:
+
+ $ svn co <SVN-ROOT>/trunk remuco-trunk
+
+Example A-2. Check out the source from release 0.9.2 into the directory
+remuco-0.9.2:
+
+ $ svn co <SVN-ROOT>/tags/0.9.1 remuco-0.9.2
