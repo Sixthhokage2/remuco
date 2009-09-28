@@ -1,0 +1,93 @@
+#!/usr/bin/env python
+
+# =============================================================================
+#
+#    Remuco - A remote control system for media players.
+#    Copyright (C) 2006-2009 Oben Sonne <obensonne@googlemail.com>
+#
+#    This file is part of Remuco.
+#
+#    Remuco is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    Remuco is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with Remuco.  If not, see <http://www.gnu.org/licenses/>.
+#
+# =============================================================================
+
+"""FooPlay adapter for Remuco, implemented as an executable script."""
+
+import remuco
+from remuco import log
+
+class FooPlayAdapter(remuco.PlayerAdapter):
+    
+    def __init__(self):
+        
+        remuco.PlayerAdapter.__init__(self, "FooPlay",
+                                      playback_known=True,
+                                      volume_known=True)
+        
+    def start(self):
+        
+        remuco.PlayerAdapter.start(self)
+
+        log.debug("here we go")
+        
+    def stop(self):
+        
+        remuco.PlayerAdapter.stop(self)
+
+        log.debug("bye, turning off the light")
+        
+    def poll(self):
+        
+        import random
+        
+        volume = random.randint(0,100)
+        self.update_volume(volume)
+        
+        playing = random.randint(0,1)
+        if playing:
+            self.update_playback(remuco.PLAYBACK_PLAY)
+        else:
+            self.update_playback(remuco.PLAYBACK_PAUSE)
+        
+    # =========================================================================
+    # control interface
+    # =========================================================================
+    
+    def ctrl_toggle_playing(self):
+        
+        log.debug("toggle FooPlay's playing status")
+        
+    # ...
+        
+    # =========================================================================
+    # request interface
+    # =========================================================================
+    
+    def request_playlist(self, reply):
+        
+        reply.ids = ["1", "2"]
+        reply.names = ["Joe - Joe's Song", "Sue - Sue's Song"]
+        reply.send()
+
+    # ...
+    
+# =============================================================================
+# main (example startup using remuco.Manager)
+# =============================================================================
+
+if __name__ == '__main__':
+    
+    pa = FooPlayAdapter() # create the player adapter
+    mg = remuco.Manager(pa)# # pass it to a manager
+    mg.run() # run the manager (blocks until interrupt signal)
