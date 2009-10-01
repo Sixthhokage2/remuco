@@ -1,0 +1,48 @@
+.\" ===========================================================================
+.\"
+.\"  Remuco - A remote control system for media players.
+.\"  Copyright (C) 2006-2009 Oben Sonne <obensonne@googlemail.com>
+.\"
+.\"  This file is part of Remuco.
+.\"
+.\"  Remuco is free software: you can redistribute it and/or modify
+.\"  it under the terms of the GNU General Public License as published by
+.\"  the Free Software Foundation, either version 3 of the License, or
+.\"  (at your option) any later version.
+.\"
+.\"  Remuco is distributed in the hope that it will be useful,
+.\"  but WITHOUT ANY WARRANTY; without even the implied warranty of
+.\"  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+.\"  GNU General Public License for more details.
+.\"
+.\"  You should have received a copy of the GNU General Public License
+.\"  along with Remuco.  If not, see <http://www.gnu.org/licenses/>.
+.\"
+.\" ===========================================================================
+.\"
+.TH remuco-report 1 
+.SH NAME
+remuco-report \- report Remuco client device information
+.SH SYNOPSIS
+.I remuco-report
+.P
+.SH DESCRIPTION
+.B Remuco
+is a duplex remote control system for Linux media players and mobile devices equipped with Bluetooth or WiFi.  
+.PP
+.I remuco-report 
+is a tool to report Remuco client device information to the Remuco developers. It is used for a kind of survey to compile a list of Remuco compatible devices. Your participation is highly appreciated! 
+.PP
+This tool does
+.I not
+send any data automatically! It shows the data it is going to send and asks the user for a final confirmation.
+.PP
+.I remuco-report
+uses zenity, kdialog or simply stdout/in for user interaction, whatever is available.
+.PP
+.SH FILES
+.TP
+.I $XDG_CACHE_HOME/remuco/devices or $HOME/.cache/remuco/devices
+Contains information about the devices seen. It gets updated whenever a new client device connects to this computer. 
+.SH AUTHOR
+This manual page was written by Oben Sonne <obensonne@googlemail.com>.
