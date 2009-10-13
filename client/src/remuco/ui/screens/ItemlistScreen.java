@@ -1,6 +1,6 @@
 /*   
  *   Remuco - A remote control system for media players.
- *   Copyright (C) 2006-2009 Oben Sonne <obensonne@googlemail.com>
+ *   Copyright (C) 2006-2009 by the Remuco team, see AUTHORS.
  *
  *   This file is part of Remuco.
  *
@@ -153,7 +153,12 @@ public final class ItemlistScreen extends List implements CommandListener {
 
 		// commands
 
-		setSelectCommand(CMD_MARK);
+		if (numItems > 0) {
+			// FIXME: ambiguous when there are items _and_ nested lists
+			setSelectCommand(CMD_MARK);
+		} else {
+			setSelectCommand(CMD.SELECT);
+		}
 		addCommand(CMD.BACK);
 		addCommand(CMD_ROOT);
 
@@ -244,7 +249,7 @@ public final class ItemlistScreen extends List implements CommandListener {
 
 			display.setCurrent(this);
 
-		} else if (c == CMD_MARK && d == this) {
+		} else if ((c == CMD_MARK || c == CMD.SELECT) && d == this) {
 
 			final int index = getSelectedIndex();
 			if (index < 0) {
@@ -284,25 +289,7 @@ public final class ItemlistScreen extends List implements CommandListener {
 		if (list == null) {
 			return;
 		}
-		if (nr >= 0 && nr < numItems) {
-			final int index = numNested + nr;
-			if (index < size()) {
-				setSelectedIndex(index, true);
-			}
-		}
-	}
-
-	public void setSelectedNested(String name) {
-
-		for (int i = 0; i < numNested; i++) {
-			if (list.getNested(i).equals(name)) {
-				if (i < size()) {
-					setSelectedIndex(i, true);
-				}
-				break;
-			}
-		}
-
+		setFocussed(numNested + nr);
 	}
 
 	private void actionAlert(String msg) {
@@ -385,13 +372,29 @@ public final class ItemlistScreen extends List implements CommandListener {
 		}
 	}
 
-	private void toggleItemMark(int index) {
+	/**
+	 * Set element <em>index</em> selected (focused). Deselects the previously
+	 * focused item afterwards (to work around issue 33). Does nothing if
+	 * <em>index</em> is out of range.
+	 */
+	private void setFocussed(int index) {
+		if (index < 0 || index >= size()) {
+			return;
+		}
+		final int previous = getSelectedIndex();
+		setSelectedIndex(index, true);
+		if (previous >= 0) {
+			setSelectedIndex(previous, false);
+		}
+	}
+
+	private void toggleItemMark(int itemNo) {
 
 		if (itemMarkedFlags.length == 0) {
 			return;
 		}
 
-		if (index == MARK_ALL) {
+		if (itemNo == MARK_ALL) {
 
 			for (int i = 0; i < itemMarkedFlags.length; i++) {
 				itemMarkedFlags[i] = true;
@@ -399,22 +402,22 @@ public final class ItemlistScreen extends List implements CommandListener {
 			numberOfMarkedItems = itemMarkedFlags.length;
 
 			if (getSelectedIndex() < numNested && numItems > 0) {
-				setSelectedIndex(numNested, true); // jump to first item
+				setFocussed(numNested); // jump to first item
 			}
 
 			return;
 		}
 
-		if (itemMarkedFlags[index]) {
-			itemMarkedFlags[index] = false;
+		if (itemMarkedFlags[itemNo]) {
+			itemMarkedFlags[itemNo] = false;
 			numberOfMarkedItems--;
 		} else {
-			itemMarkedFlags[index] = true;
+			itemMarkedFlags[itemNo] = true;
 			numberOfMarkedItems++;
 		}
 
-		if (index < numItems - 1) {
-			setSelectedIndex(numNested + index + 1, true); // jump to next item
+		if (itemNo < numItems - 1) {
+			setFocussed(numNested + itemNo + 1); // jump to next item
 		}
 	}
 
