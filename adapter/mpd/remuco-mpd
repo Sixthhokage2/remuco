@@ -1,0 +1,624 @@
+#!/usr/bin/python
+
+# =============================================================================
+#
+#    Remuco - A remote control system for media players.
+#    Copyright (C) 2006-2009 by the Remuco team, see AUTHORS.
+#
+#    This file is part of Remuco.
+#
+#    Remuco is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    Remuco is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with Remuco.  If not, see <http://www.gnu.org/licenses/>.
+#
+# =============================================================================
+
+"""MPD adapter for Remuco, implemented as an executable script."""
+
+import os.path
+import socket # python-mpd (0.2.0) does not fully abstract socket errors
+
+import gobject
+
+import mpd
+
+import remuco
+from remuco import log
+
+# =============================================================================
+# actions
+# =============================================================================
+
+IA_JUMP = remuco.ItemAction("Jump to")
+IA_REMOVE = remuco.ItemAction("Remove", multiple=True)
+PLAYLIST_ACTIONS = (IA_JUMP, IA_REMOVE)
+
+IA_ADD = remuco.ItemAction("Add to playlist", multiple=True)
+IA_SET = remuco.ItemAction("Set as playlist", multiple=True)
+MLIB_ITEM_ACTIONS = (IA_ADD, IA_SET)
+
+LA_PLAY = remuco.ListAction("Play")
+LA_ENQUEUE = remuco.ListAction("Enqueue")
+MLIB_LIST_ACTIONS = (LA_PLAY, LA_ENQUEUE)
+
+SEARCH_MASK = [ "Artist", "Album", "Title" ]
+
+# =============================================================================
+# constants
+# =============================================================================
+
+MLIB_FILES = "Files"
+MLIB_PLAYLISTS = "Playlists"
+
+# =============================================================================
+# MPD player adapter
+# =============================================================================
+
+class MPDAdapter(remuco.PlayerAdapter):
+    
+    def __init__(self):
+        
+        remuco.PlayerAdapter.__init__(self, "MPD",
+                                      playback_known=True,
+                                      volume_known=True,
+                                      repeat_known=True,
+                                      shuffle_known=True,
+                                      progress_known=True,
+                                      search_mask=SEARCH_MASK)
+        
+        self.__mpd = mpd.MPDClient()
+        
+        self.__mpd_host = self.config.get_custom("mpd-host", "localhost")
+        
+        port = self.config.get_custom("mpd-port", "6600")
+        try:
+            self.__mpd_port = int(port)
+        except ValueError, e:
+            log.error("option mpd-port malformed (%s) -> use default" % port)
+            self.__mpd_port = 6600
+            
+        self.__mpd_pwd = self.config.get_custom("mpd-password", "")
+        
+        self.__mpd_music_dir = self.config.get_custom("mpd-music-dir",
+                                                      "/var/lib/mpd/music")
+        
+        
+        log.debug("MPD is at %s:%d" % (self.__mpd_host, self.__mpd_port))
+        
+        # ensure options are saved:
+        self.config.set_custom("mpd-host", self.__mpd_host)
+        self.config.set_custom("mpd-port", self.__mpd_port)
+        self.config.set_custom("mpd-password", self.__mpd_pwd)
+        self.config.set_custom("mpd-music-dir", self.__mpd_music_dir)
+        
+        self.__playing = False
+        self.__shuffle = False
+        self.__repeat = False
+        self.__volume = 0
+        self.__position = -1
+        self.__progress = 0
+        self.__length = 0
+        self.__song = None
+        
+    def start(self):
+        
+        remuco.PlayerAdapter.start(self)
+        
+        if not self.__check_and_refresh_connection():
+            raise StandardError("failed to connect to MPD")
+
+        try:
+            mpd_version = self.__mpd.mpd_version
+        except mpd.MPDError:
+            log.warning("failed to get MPD version")
+            mpd_version = "unknown"
+
+        log.info("MPD version: %s" % mpd_version)
+
+    def stop(self):
+        
+        remuco.PlayerAdapter.stop(self)
+        
+        try:
+            self.__mpd.disconnect()
+        except mpd.ConnectionError:
+            pass
+
+        log.debug("MPD adapter stopped")
+        
+    def poll(self):
+        
+        self.__poll_status()
+        
+        self.__poll_item()
+    
+    # =========================================================================
+    # control interface
+    # =========================================================================
+    
+    def ctrl_toggle_playing(self):
+        
+        if not self.__check_and_refresh_connection():
+            return
+        
+        try:
+            if self.__playing:
+                self.__mpd.pause(1)
+            else:
+                self.__mpd.play()
+        except mpd.MPDError, e:
+            log.warning("failed to control MPD: %s" % e)
+        else:
+            gobject.idle_add(self.__poll_status)
+        
+    def ctrl_toggle_repeat(self):
+        
+        if not self.__check_and_refresh_connection():
+            return
+    
+        try:
+            self.__mpd.repeat(int(not self.__repeat))
+        except mpd.MPDError, e:
+            log.warning("failed to control MPD: %s" % e)
+        else:
+            gobject.idle_add(self.__poll_status)
+            
+    def ctrl_toggle_shuffle(self):
+        
+        if not self.__check_and_refresh_connection():
+            return
+    
+        try:
+            self.__mpd.random(int(not self.__shuffle))
+        except mpd.MPDError, e:
+            log.warning("failed to control MPD: %s" % e)
+        else:
+            gobject.idle_add(self.__poll_status)
+            
+    def ctrl_next(self):
+        
+        if not self.__check_and_refresh_connection():
+            return
+    
+        try:
+            self.__mpd.next()
+        except mpd.MPDError, e:
+            log.warning("failed to control MPD: %s" % e)
+        else:
+            gobject.idle_add(self.__poll_status)
+            
+    def ctrl_previous(self):
+        
+        if not self.__check_and_refresh_connection():
+            return
+    
+        try:
+            self.__mpd.previous()
+        except mpd.MPDError, e:
+            log.warning("failed to control MPD: %s" % e)
+        else:
+            gobject.idle_add(self.__poll_status)
+            
+    def ctrl_seek(self, direction):
+        
+        if self.__length == 0:
+            return
+        
+        if not self.__check_and_refresh_connection():
+            return
+        
+        progress = self.__progress + direction * 5
+        progress = min(progress, self.__length)
+        progress = max(progress, 0)
+        
+        try:
+            self.__mpd.seek(self.__position, progress)
+        except mpd.MPDError, e:
+            log.warning("failed to control MPD: %s" % e)
+        else:
+            gobject.idle_add(self.__poll_status)
+    
+    def ctrl_volume(self, direction):
+        
+        if not self.__check_and_refresh_connection():
+            return
+        
+        try:
+            if direction == 0:
+                self.__mpd.setvol(0)
+            else:
+                volume = self.__volume + direction * 5
+                volume = min(volume, 100)
+                volume = max(volume, 0)
+                self.__mpd.setvol(volume)
+        except mpd.MPDError, e:
+            log.warning("failed to control MPD: %s" % e)
+        else:
+            gobject.idle_add(self.__poll_status)
+            
+    # =========================================================================
+    # action interface
+    # =========================================================================
+    
+    def action_playlist_item(self, action_id, positions, ids):
+        
+        if not self.__check_and_refresh_connection():
+            return        
+        
+        if action_id == IA_JUMP.id:
+            
+            try:
+                self.__mpd.play(positions[0])
+            except mpd.MPDError, e:
+                log.warning("failed to control MPD: %s" % e)
+        
+        elif action_id == IA_REMOVE.id:
+            
+            positions.sort()
+            positions.reverse()
+            self.__batch_cmd(self.__mpd.delete, positions)
+            
+        else:
+            log.error("** BUG ** unexpected playlist item action")
+    
+    def action_mlib_item(self, action_id, path, positions, ids):
+        
+        if not self.__check_and_refresh_connection():
+            return
+        
+        if action_id == IA_ADD.id:
+            
+            self.__batch_cmd(self.__mpd.add, ids)
+            
+        elif action_id == IA_SET.id:
+            
+            try:
+                self.__mpd.clear()
+                self.__batch_cmd(self.__mpd.add, ids)
+                if self.__playing:
+                    self.__mpd.play(0)
+            except mpd.MPDError, e:
+                log.warning("failed to set playlist: %s" % e)
+        
+        else:
+            log.error("** BUG ** unexpected mlib item action")
+    
+    def action_mlib_list(self, action_id, path):
+        
+        if not self.__check_and_refresh_connection():
+            return
+        
+        try:
+            name = path[1]
+        except IndexError:
+            log.error("** BUG ** unexpected path for list actions: %s" % path)
+            return
+        
+        if action_id == LA_ENQUEUE.id:
+            
+            try:
+                self.__mpd.load(name)
+            except mpd.MPDError, e:
+                log.warning("failed to enqueue playlist (%s): %s" % (name, e))
+        
+        elif action_id == LA_PLAY.id:
+            
+            try:
+                self.__mpd.clear()
+                self.__mpd.load(name)
+                if self.__playing:
+                    self.__mpd.play(0)
+            except mpd.MPDError, e:
+                log.warning("failed to play playlist (%s): %s" % (name, e))
+        
+        else:
+            log.error("** BUG ** unexpected mlib list action")
+    
+    def action_search_item(self, action_id, positions, ids):
+        
+        self.action_mlib_item(action_id, [], positions, ids)
+        
+    # =========================================================================
+    # request interface
+    # =========================================================================
+    
+    def request_playlist(self, reply):
+        
+        if not self.__check_and_refresh_connection():
+            return
+        
+        try:
+            playlist = self.__mpd.playlistinfo()
+        except mpd.MPDError, e:
+            log.warning("failed to control MPD: %s" % e)
+            playlist = []
+        
+        for song in playlist:
+            reply.ids.append(song.get("file", "XXX"))
+            artist = song.get("artist", "??")
+            title = song.get("title", "??")
+            reply.names.append("%s - %s" % (artist, title))
+        
+        reply.item_actions = PLAYLIST_ACTIONS
+        
+        reply.send()
+
+    def request_mlib(self, reply, path):
+        
+        if not self.__check_and_refresh_connection():
+            return
+        
+        if not path:
+            reply.nested = [MLIB_FILES, MLIB_PLAYLISTS]
+        elif path[0] == MLIB_FILES:
+            reply.nested, reply.ids, reply.names = self.__get_music_dir(path[1:])
+            reply.item_actions = MLIB_ITEM_ACTIONS
+        elif path[0] == MLIB_PLAYLISTS and len(path) == 1:
+            reply.nested = self.__get_playlists()
+            reply.list_actions = MLIB_LIST_ACTIONS
+        elif path[0] == MLIB_PLAYLISTS and len(path) == 2:
+            reply.ids, reply.names = self.__get_playlist_content(path[1])
+            reply.item_actions = MLIB_ITEM_ACTIONS
+        elif path[0] == MLIB_PLAYLISTS:
+            log.error("** BUG ** unexpected path depth for playlists")
+        else:
+            log.error("** BUG ** unexpected root list: %s" % path[0])
+        
+        reply.send()
+        
+    def request_search(self, reply, query):
+        
+        if not self.__check_and_refresh_connection():
+            return
+
+        result_dicts = []
+        
+        for field, value in zip(SEARCH_MASK, query):
+            if not value:
+                continue
+            songs = self.__mpd.search(field, value)
+            result = {}
+            for song in songs:
+                result[song.get("file", "unknown")] = song
+            result_dicts.append(result)
+            
+        result = self.__intersect_dicts(result_dicts)
+        
+        reply.ids, reply.names = self.__songs_to_item_list(result.values())
+        
+        reply.item_actions = MLIB_ITEM_ACTIONS
+        
+        reply.send()
+        
+    # =========================================================================
+    # internal methods
+    # =========================================================================
+    
+    def __poll_status(self):
+        
+        if not self.__check_and_refresh_connection():
+            return
+        
+        status = self.__mpd.status()
+        
+        self.__volume = int(status.get("volume", "0"))
+        self.update_volume(self.__volume)
+
+        self.__repeat = status.get("repeat", "0") != "0"
+        self.update_repeat(self.__repeat)
+
+        self.__shuffle = status.get("random", "0") != "0"
+        self.update_shuffle(self.__shuffle)
+
+        playback = status.get("state", "stop")
+        if playback == "play":
+            self.__playing = True
+            self.update_playback(remuco.PLAYBACK_PLAY)
+        elif playback == "pause":
+            self.__playing = False
+            self.update_playback(remuco.PLAYBACK_PAUSE)
+        else:
+            self.__playing = False
+            self.update_playback(remuco.PLAYBACK_STOP)
+        
+        progress_length = status.get("time", "0:0").split(':')
+        self.__progress = int(progress_length[0])
+        self.__length = int(progress_length[1])
+        self.update_progress(self.__progress, self.__length)
+         
+        self.__position = int(status.get("song", "-1"))
+        self.update_position(max(int(self.__position), 0))
+        
+    def __poll_item(self):
+        
+        if not self.__check_and_refresh_connection():
+            return
+    
+        try:
+            song = self.__mpd.currentsong()
+        except mpd.MPDError, e:
+            log.warning("failed to query current song: %s" % e)
+            song = None
+        
+        if self.__song == song:
+            return
+
+        self.__song = song
+
+        if not song:
+            self.update_item(None, None, None)
+            return
+        
+        id = song.get("file", "XXX")
+        
+        info = {}
+        info[remuco.INFO_ARTIST] = song.get("artist")
+        info[remuco.INFO_TITLE] = song.get("title")
+        info[remuco.INFO_ALBUM] = song.get("album")
+        info[remuco.INFO_GENRE] = song.get("genre")
+        info[remuco.INFO_LENGTH] = song.get("time")
+        info[remuco.INFO_YEAR] = song.get("year")
+        
+        full_file_name = os.path.join(self.__mpd_music_dir, id)
+        img = self.find_image(full_file_name)
+        
+        self.update_item(id, info, img)
+    
+    def __get_music_dir(self, path):
+        """Client requests a certain path in MPD's music directory."""
+        
+        path_s = ""
+        for elem in path:
+            path_s = os.path.join(path_s, elem)
+        
+        try:
+            content = self.__mpd.lsinfo(path_s)
+        except mpd.MPDError, e:
+            log.warning("failed to get dir list (%s): %s" % (path_s, e))
+            content = []
+            
+        dirs, files = [], []
+        
+        for entry in content:
+            if "directory" in entry:
+                dirs.append(os.path.basename(entry["directory"]))
+            elif "file" in entry:
+                files.append(entry["file"])
+            else:
+                pass
+        
+        songs = self.__batch_cmd(self.__mpd.listallinfo, files)
+        
+        names = []
+        if songs and len(songs) == len(files):
+            for item in songs:
+                artist = item[0].get("artist", "??")
+                title = item[0].get("title", "??")
+                names.append("%s - %s" % (artist, title))
+        else:
+            files = []
+        
+        return dirs, files, names
+        
+    def __get_playlists(self):
+        
+        try:
+            content = self.__mpd.lsinfo()
+        except mpd.MPDError, e:
+            log.warning("failed to get playlists: %s" % e)
+            content = []
+            
+        names = []
+        
+        for entry in content:
+            if "playlist" in entry:
+                names.append(os.path.basename(entry["playlist"]))
+            else:
+                pass
+            
+        return names
+    
+    def __get_playlist_content(self, name):
+
+        try:
+            songs = self.__mpd.listplaylistinfo(name)
+        except mpd.MPDError, e:
+            log.warning("failed to get playlist content (%s): %s" % (name, e))
+            songs = []
+            
+        return self.__songs_to_item_list(songs)
+    
+    def __songs_to_item_list(self, songs):
+        
+        ids, names = [], []
+        
+        for item in songs:
+            ids.append(item.get("file", "XXX"))
+            artist = item.get("artist", "??")
+            title = item.get("title", "??")
+            names.append("%s - %s" % (artist, title))
+            
+        return ids, names
+    
+    def __check_and_refresh_connection(self):
+        """Check the current MPD connection and reconnect if broken."""
+        
+        try:
+            self.__mpd.ping()
+        except mpd.ConnectionError:
+            try:
+                self.__mpd.disconnect()
+            except mpd.ConnectionError:
+                pass
+            try:
+                self.__mpd.connect(self.__mpd_host, self.__mpd_port)
+                self.__mpd.ping()
+                if self.__mpd_pwd:
+                    self.__mpd.password(self.__mpd_pwd)
+                log.debug("connected to MPD")
+            except (mpd.ConnectionError, socket.error), e:
+                log.error("failed to connect to MPD: %s" % e)
+                self.manager.stop()
+                return False
+            
+        return True
+    
+    def __intersect_dicts(self, dict_list):
+        """Creates an intersection of dictionaries based on keys."""
+        
+        if not dict_list:
+            return {}
+        
+        first, rest = dict_list[0], dict_list[1:]
+        keys_intersection = set(first.keys())
+        for other_dict in rest:
+            keys_intersection.intersection_update(set(other_dict.keys()))
+        
+        result = {}
+        for key in keys_intersection:
+            result[key] = first[key]
+
+        return result
+    
+    def __batch_cmd(self, cmd, params):
+        
+        try:
+            self.__mpd.command_list_ok_begin()
+        except mpd.MPDError, e:
+            log.warning("failed to start command list: %s" % e)
+            return
+        
+        for param in params:
+            try:
+                cmd(param)
+            except mpd.MPDError, e:
+                log.warning("in-list command failed: %s" % e)
+                break
+        
+        try:
+            return self.__mpd.command_list_end()
+        except mpd.MPDError, e:
+            log.warning("failed to end command list: %s" % e)
+            try:
+                self.__mpd.disconnect()
+            except mpd.ConnectionError:
+                pass
+    
+# =============================================================================
+# main
+# =============================================================================
+
+if __name__ == '__main__':
+    
+    pa = MPDAdapter()
+    mg = remuco.Manager(pa)
+    mg.run()
