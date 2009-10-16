@@ -1,0 +1,25 @@
+syntax: regexp
+
+# Garbage, temporary and backup files:
+.~$
+install.*\.log$
+^sandbox$
+
+# Build files:
+\.pyc$
+[./]?build/.*$ # all files in 'build' or '*.build' directories
+[./]?dist/.*$ # all files in 'dist' or '*.dist' directories
+[./]?deployed/.*$ # all files in 'deployed' or '*.deployed' directories
+^client/bin$
+^client/build\.properties$
+^client/wtk-emulator\.properties$
+^client/tools$
+
+# IDE files:
+^\.settings$
+^\.project$
+^\.pydevproject$
+^\.classpath$
+^\.eclipseme\.tmp$
+^\.eclipseme$
+
