@@ -34,24 +34,25 @@ import javax.microedition.lcdui.Item;
 import javax.microedition.lcdui.List;
 import javax.microedition.lcdui.StringItem;
 
-import remuco.comm.BluetoothFactory;
+import remuco.client.common.io.ISocket;
+import remuco.client.common.player.Player;
+import remuco.client.common.util.Log;
+import remuco.client.jme.io.BluetoothFactory;
+import remuco.client.jme.io.Socket;
+import remuco.client.jme.ui.CMD;
+import remuco.client.jme.ui.Theme;
+import remuco.client.jme.ui.screens.DeviceSelectorScreen;
+import remuco.client.jme.ui.screens.DeviceSelectorScreen.IDeviceSelectionListener;
+import remuco.client.jme.ui.screens.LogScreen;
+import remuco.client.jme.ui.screens.PlayerScreen;
+import remuco.client.jme.ui.screens.ServiceSelectorScreen;
+import remuco.client.jme.ui.screens.WaitingScreen;
 import remuco.comm.Connection;
+import remuco.comm.Connection.IConnectionListener;
 import remuco.comm.IDevice;
 import remuco.comm.IServiceFinder;
 import remuco.comm.IServiceListener;
 import remuco.comm.InetServiceFinder;
-import remuco.comm.Connection.IConnectionListener;
-import remuco.player.Player;
-import remuco.ui.CMD;
-import remuco.ui.Theme;
-import remuco.ui.screens.DeviceSelectorScreen;
-import remuco.ui.screens.LogScreen;
-import remuco.ui.screens.PlayerScreen;
-import remuco.ui.screens.ServiceSelectorScreen;
-import remuco.ui.screens.WaitingScreen;
-import remuco.ui.screens.DeviceSelectorScreen.IDeviceSelectionListener;
-import remuco.util.FormLogger;
-import remuco.util.Log;
 
 /**
  * MIDlet of the Remuco client.
@@ -139,7 +140,7 @@ public class Remuco implements CommandListener, IConnectionListener,
 	/** Screen to select a device to connect to */
 	private final DeviceSelectorScreen screenDeviceSelector;
 
-	private final Form screenLog;
+	private final LogScreen screenLog;
 
 	/** Main player interaction screen */
 	private PlayerScreen screenPlayer = null;
@@ -161,7 +162,7 @@ public class Remuco implements CommandListener, IConnectionListener,
 			Log.ln("RUNING IN EMULATION MODE ..");
 			screenLog.append("Emulation -> logging goes to standard out!");
 		} else {
-			Log.setOut(new FormLogger(screenLog));
+			Log.setOut(screenLog);
 		}
 
 		// init configuration
@@ -262,7 +263,7 @@ public class Remuco implements CommandListener, IConnectionListener,
 				((IServiceFinder) property).cancelServiceSearch();
 			} else if (property instanceof Connection) {
 				// currently waiting for player description
-				((Connection) property).down();
+				((Connection) property).close();
 			} else {
 				Log.bug("Mar 17, 2009.9:40:43 PM");
 			}
@@ -327,11 +328,12 @@ public class Remuco implements CommandListener, IConnectionListener,
 		display.setCurrent(screenPlayer);
 	}
 
-	public void notifyDisconnected(String url, UserException reason) {
+	public void notifyDisconnected(ISocket sock, UserException reason) {
 
 		disconnect();
-
-		if (url != null) {
+		
+		if (sock != null) {
+			final String url = ((Socket) sock).url;
 			display.setCurrent(new ReconnectDialog(url, reason.getDetails()));
 		} else {
 			alert(reason, screenDeviceSelector);
@@ -430,14 +432,16 @@ public class Remuco implements CommandListener, IConnectionListener,
 	 */
 	private void connect(String url) {
 
-		final Connection conn;
+		final Socket sock;
 
 		try {
-			conn = new Connection(url, this);
+			sock = new Socket(url);
 		} catch (UserException e) {
 			alert(e, screenDeviceSelector);
 			return;
 		}
+		
+		final Connection conn = new Connection(sock, this);
 
 		screenConnecting.attachProperty(conn);
 		screenConnecting.setMessage("Connecting to player.");

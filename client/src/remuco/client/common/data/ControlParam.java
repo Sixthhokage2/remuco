@@ -18,58 +18,31 @@
  *   along with Remuco.  If not, see <http://www.gnu.org/licenses/>.
  *   
  */
-package remuco;
+package remuco.client.common.data;
 
-import javax.microedition.midlet.MIDlet;
-import javax.microedition.midlet.MIDletStateChangeException;
-
+import remuco.client.common.serial.BinaryDataExecption;
+import remuco.client.common.serial.ISerializable;
+import remuco.client.common.serial.SerialAtom;
 import remuco.client.common.util.Log;
 
-public class Entry extends MIDlet {
+/** Parameters of a control to send to the server. */
+public class ControlParam implements ISerializable {
 
-	private Remuco remuco;
+	private static final int[] ATOMS_FMT = new int[] { SerialAtom.TYPE_I };
 
-	protected void destroyApp(boolean unconditional)
-			throws MIDletStateChangeException {
+	private final SerialAtom[] atoms;
 
-		remuco.destroy();
-		remuco = null;
-		MainLoop.disable();
-
-		Log.ln("[EN] managed exit");
+	public ControlParam(int param) {
+		atoms = SerialAtom.build(ATOMS_FMT);
+		atoms[0].i = param;
 	}
 
-	/**
-	 * Same as {@link #notifyDestroyed()} but does additional clean up.
-	 */
-	protected void notifyExit() {
-
-		remuco = null;
-		MainLoop.disable();
-
-		Log.ln("[EN] user exit");
-		
-		notifyDestroyed();
-		
+	public SerialAtom[] getAtoms() {
+		return atoms;
 	}
 
-	protected void pauseApp() {
-
-		Log.ln("[EN] paused");
-
-	}
-
-	protected void startApp() throws MIDletStateChangeException {
-
-		MainLoop.enable();
-
-		if (remuco == null) {
-			remuco = new Remuco(this);
-			Log.ln("[EN] started");
-		} else {
-			Log.ln("[EN] resumed");
-		}
-
+	public void notifyAtomsUpdated() throws BinaryDataExecption {
+		Log.bug("Mar 9, 2009.5:36:51 PM");
 	}
 
 }

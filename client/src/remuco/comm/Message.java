@@ -20,7 +20,8 @@
  */
 package remuco.comm;
 
-import remuco.util.Log;
+import remuco.client.common.serial.Serial;
+import remuco.client.common.util.Log;
 
 /**
  * A message received from or to send to the Remuco server.

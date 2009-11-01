@@ -18,27 +18,36 @@
  *   along with Remuco.  If not, see <http://www.gnu.org/licenses/>.
  *   
  */
-package remuco.comm;
+package remuco.client.jme.io;
 
 import remuco.client.common.util.Tools;
+import remuco.comm.IDevice;
 
-public class WifiDevice implements IDevice {
+public class BluetoothDevice implements IDevice {
 
-	private static final String PORT = "34271";
+	/** Service search strategy. */
+	public static final int SEARCH_STANDARD = 0, SEARCH_FAILSAFE = 1,
+			SEARCH_MANUAL = 2;
+
+	private static final int SEARCH_TYPE_LAST = SEARCH_MANUAL;
 
 	private String address;
 
+	private boolean authenticate, encrypt;
+
+	private String chan;
+
 	private String name;
 
-	private String options;
+	private int search;
 
-	private String port;
-
-	public WifiDevice() {
+	public BluetoothDevice() {
 		address = "";
-		port = PORT;
-		options = "";
+		search = SEARCH_STANDARD;
+		chan = "1";
 		name = "";
+		authenticate = false;
+		encrypt = false;
 	}
 
 	/**
@@ -49,30 +58,41 @@ public class WifiDevice implements IDevice {
 	 * @throws IllegalArgumentException
 	 *             if <em>flat</em> is malformed
 	 */
-	public WifiDevice(String flat) throws IllegalArgumentException {
+	public BluetoothDevice(String flat) throws IllegalArgumentException {
 
 		String sa[];
 
 		sa = Tools.splitString(flat, FIELD_SEP, false);
 
-		if (sa.length != 5 || sa[0].charAt(0) != TYPE_WIFI) {
+		if (sa.length != 7 || sa[0].charAt(0) != TYPE_BLUETOOTH) {
 			throw new IllegalArgumentException();
 		}
 
 		address = sa[1];
 
-		port = sa[2];
 		try {
-			Integer.parseInt(port);
+			search = Integer.parseInt(sa[2]);
+		} catch (NumberFormatException e) {
+			throw new IllegalArgumentException();
+		}
+		if (search < 0 && search > SEARCH_TYPE_LAST) {
+			throw new IllegalArgumentException();
+		}
+
+		chan = sa[3];
+		try {
+			Integer.parseInt(chan);
 		} catch (NumberFormatException e) {
 			throw new IllegalArgumentException();
 		}
 
-		options = sa[3];
-		name = sa[4];
+		authenticate = sa[4].equals("true");
+		encrypt = sa[5].equals("true");
+
+		name = sa[6];
 	}
 
-	/** Compares 2 device based on address and port. */
+	/** Compares 2 device based solely on its address. */
 	public boolean equals(Object obj) {
 
 		if (obj == this) {
@@ -83,25 +103,28 @@ public class WifiDevice implements IDevice {
 			return false;
 		}
 
-		if (!(obj instanceof WifiDevice)) {
+		if (!(obj instanceof BluetoothDevice)) {
 			return false;
 		}
 
-		final WifiDevice other = (WifiDevice) obj;
+		final BluetoothDevice other = (BluetoothDevice) obj;
 
-		return other.address.equals(address) && other.port.equals(port);
-
+		return other.address.equals(address);
 	}
 
 	public String getAddress() {
 		return address;
 	}
 
+	public String getChan() {
+		return chan;
+	}
+
 	public String getLabel() {
 		if (name.length() > 0) {
 			return name;
 		} else {
-			return address + ":" + port;
+			return address;
 		}
 	}
 
@@ -109,32 +132,44 @@ public class WifiDevice implements IDevice {
 		return name;
 	}
 
-	public String getOptions() {
-		return options;
-	}
-
-	public String getPort() {
-		return port;
+	public int getSearch() {
+		return search;
 	}
 
 	public char getType() {
-		return TYPE_WIFI;
+		return TYPE_BLUETOOTH;
+	}
+
+	public boolean isAuthenticate() {
+		return authenticate;
+	}
+
+	public boolean isEncrypt() {
+		return encrypt;
 	}
 
 	public void setAddress(String address) {
 		this.address = address;
 	}
 
+	public void setAuthenticate(boolean authenticate) {
+		this.authenticate = authenticate;
+	}
+
+	public void setEncrypt(boolean encrypt) {
+		this.encrypt = encrypt;
+	}
+
 	public void setName(String name) {
 		this.name = name;
 	}
 
-	public void setOptions(String options) {
-		this.options = options;
+	public void setPort(String port) {
+		this.chan = port;
 	}
 
-	public void setPort(String port) {
-		this.port = port;
+	public void setSearch(int search) {
+		this.search = search;
 	}
 
 	/** Create flat representation of this device. */
@@ -142,13 +177,17 @@ public class WifiDevice implements IDevice {
 
 		final StringBuffer sb = new StringBuffer();
 
-		sb.append(TYPE_WIFI);
+		sb.append(TYPE_BLUETOOTH);
 		sb.append(FIELD_SEP);
 		sb.append(address);
 		sb.append(FIELD_SEP);
-		sb.append(port);
+		sb.append(search);
 		sb.append(FIELD_SEP);
-		sb.append(options);
+		sb.append(chan);
+		sb.append(FIELD_SEP);
+		sb.append(authenticate);
+		sb.append(FIELD_SEP);
+		sb.append(encrypt);
 		sb.append(FIELD_SEP);
 		sb.append(name);
 

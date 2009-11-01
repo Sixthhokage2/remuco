@@ -26,21 +26,19 @@ import java.io.EOFException;
 import java.io.IOException;
 import java.util.TimerTask;
 
-import javax.microedition.io.ConnectionNotFoundException;
-import javax.microedition.io.Connector;
-import javax.microedition.io.SocketConnection;
-import javax.microedition.io.StreamConnection;
-
-import remuco.ClientInfo;
 import remuco.Config;
 import remuco.IOptionListener;
 import remuco.MainLoop;
 import remuco.OptionDescriptor;
 import remuco.UserException;
-import remuco.player.Player;
-import remuco.player.PlayerInfo;
-import remuco.util.Log;
-import remuco.util.Tools;
+import remuco.client.common.data.ClientInfo;
+import remuco.client.common.data.PlayerInfo;
+import remuco.client.common.io.ISocket;
+import remuco.client.common.player.Player;
+import remuco.client.common.serial.BinaryDataExecption;
+import remuco.client.common.serial.Serial;
+import remuco.client.common.util.Log;
+import remuco.client.common.util.Tools;
 
 /**
  * Send and receive messages.
@@ -66,13 +64,13 @@ public final class Connection implements Runnable, IOptionListener {
 		/**
 		 * Notifies a disconnection.
 		 * 
-		 * @param url
-		 *            the URL of the broken connection if it is worth trying to
-		 *            reconnect, or <code>null</code> otherwise
+		 * @param sock
+		 *            the socket used by the broken connection - if it is worth
+		 *            trying to reconnect, otherwise <code>null</code>
 		 * @param reason
 		 *            the user exception describing the reason for disconnecting
 		 */
-		public void notifyDisconnected(String url, UserException reason);
+		public void notifyDisconnected(ISocket sock, UserException reason);
 
 	}
 
@@ -124,58 +122,31 @@ public final class Connection implements Runnable, IOptionListener {
 
 	private TimerTask ping;
 
-	private final StreamConnection sc;
+	/** Flag indicating if a reconnect has chance to succeed. */
+	private boolean reconnect = true;
 
-	private String url = null;
+	private final ISocket sock;
 
-	public Connection(String url, IConnectionListener connectionListener)
-			throws UserException {
+	public Connection(ISocket sock, IConnectionListener connectionListener) {
 
-		this.url = url;
+		this.sock = sock;
 		this.connectionListener = connectionListener;
 
-		Log.ln("[CN] url: " + url);
+		Log.ln("[CN] sock: " + sock);
 
-		try {
-			sc = (StreamConnection) Connector.open(url);
-			logSocketOptions(sc);
-		} catch (ConnectionNotFoundException e) {
-			Log.ln("[CN] open url failed", e);
-			throw new UserException("Connecting failed", "Target not found.", e);
-		} catch (SecurityException e) {
-			Log.ln("[CN] open url failed", e);
-			throw new UserException("Connecting failed",
-					"Not allowed to connect.", e);
-		} catch (IOException e) {
-			Log.ln("[CN] open url failed", e);
-			throw new UserException("Connecting failed",
-					"There was an IO error while setting up the connection.", e);
-		}
-
-		try {
-
-			dis = sc.openDataInputStream();
-			dos = sc.openDataOutputStream();
-
-		} catch (IOException e) {
-
-			Log.ln("[CN] open streams failed", e);
-			downPrivate();
-			throw new UserException("Connecting failed",
-					"There was an IO error while opening the IO streams.", e);
-
-		}
+		dis = new DataInputStream(sock.getInputStream());
+		dos = new DataOutputStream(sock.getOutputStream());
 
 		new Thread(this).start();
 	}
 
 	/**
-	 * Shut down the connection. If the connection is already down, this method
+	 * Close the connection. If the connection is already closed, this method
 	 * has no effect. There will be no connection events for a
 	 * {@link IConnectionListener} after a call to this method.
 	 * 
 	 */
-	public void down() {
+	public void close() {
 
 		Log.ln("[CN] down by user");
 
@@ -214,7 +185,7 @@ public final class Connection implements Runnable, IOptionListener {
 		// delay startup a little bit to give UI a chance to update
 		try {
 			Thread.sleep(200);
-		} catch (InterruptedException e1) {
+		} catch (InterruptedException e) {
 		}
 
 		final PlayerInfo pinfo;
@@ -291,7 +262,7 @@ public final class Connection implements Runnable, IOptionListener {
 				Log.ln("[CN] connection broken", e);
 				downPrivate();
 				notifyDisconnected("Connection broken",
-					"There was an IO error while sending data.", e);
+					"IO Error while sending data.", e);
 
 			}
 		}
@@ -305,41 +276,7 @@ public final class Connection implements Runnable, IOptionListener {
 
 		ping(false);
 
-		try {
-			dis.close();
-		} catch (IOException e) {
-		}
-		try {
-			dos.close();
-		} catch (IOException e) {
-		}
-		try {
-			sc.close();
-		} catch (IOException e) {
-		}
-
-	}
-
-	private void logSocketOptions(StreamConnection conn) throws IOException {
-		if (sc instanceof SocketConnection) {
-			final SocketConnection sock = (SocketConnection) sc;
-			final StringBuffer sb = new StringBuffer("[CN] socket options: ");
-			try {
-				sb.append(sock.getSocketOption(SocketConnection.DELAY));
-				sb.append(',');
-				sb.append(sock.getSocketOption(SocketConnection.KEEPALIVE));
-				sb.append(',');
-				sb.append(sock.getSocketOption(SocketConnection.LINGER));
-				sb.append(',');
-				sb.append(sock.getSocketOption(SocketConnection.RCVBUF));
-				sb.append(',');
-				sb.append(sock.getSocketOption(SocketConnection.SNDBUF));
-			} catch (IllegalArgumentException e) {
-				Log.bug("Feb 2, 2009.7:39:47 PM");
-				return;
-			}
-			Log.ln(sb.toString());
-		}
+		sock.close();
 	}
 
 	/** See {@link #notifyDisconnected(UserException)}. */
@@ -365,7 +302,8 @@ public final class Connection implements Runnable, IOptionListener {
 
 			MainLoop.schedule(new TimerTask() {
 				public void run() {
-					connectionListener.notifyDisconnected(url, ue);
+					connectionListener.notifyDisconnected(reconnect ? sock
+							: null, ue);
 				}
 			});
 		}
@@ -482,12 +420,12 @@ public final class Connection implements Runnable, IOptionListener {
 			Log.ln("[CN] connection broken", e);
 			downPrivate();
 			throw new UserException("Connection broken",
-					"There was an IO error while receiving data.", e);
+					"IO error while receiving data.", e);
 		}
 
 		if (m.id == Message.CONN_BYE) {
 			downPrivate();
-			url = null; // suppress reconnecting
+			reconnect = false; // suppress reconnecting
 			throw new UserException("Disconnected.", "Remote player said bye.");
 		}
 
@@ -556,8 +494,7 @@ public final class Connection implements Runnable, IOptionListener {
 				Log.ln("[CN] waiting for hello msg failed", e);
 				downPrivate();
 				throw new UserException("Connecting failed",
-						"There was an IO error while waiting for the hello "
-								+ "message from the server.", e);
+						"IO error while waiting for the hello message.", e);
 			}
 
 			Tools.sleep(HELLO_TIMEOUT / 10);
@@ -571,8 +508,7 @@ public final class Connection implements Runnable, IOptionListener {
 					+ "B, only " + n + "B available)");
 			downPrivate();
 			throw new UserException("Connecting failed",
-					"Timeout while waiting for the hello message from the "
-							+ "server.");
+					"Timeout while waiting for the hello message.");
 		}
 
 		// ////// read hello message ////// //
@@ -582,13 +518,13 @@ public final class Connection implements Runnable, IOptionListener {
 			if (readAndCompare(PREFIX) < 0) {
 				Log.ln("[CN] IO prefix differs");
 				downPrivate();
-				url = null; // suppress reconnecting;
+				reconnect = false; // suppress reconnecting
 				throw new UserException("Connecting failed",
-						"Received a malformed hello message from the server.");
+						"Received a malformed hello message.");
 			}
 			if (readAndCompare(PROTO_VERSION) < 0) {
 				downPrivate();
-				url = null; // suppress reconnecting;
+				reconnect = false; // suppress reconnecting
 				throw new UserException("Connecting failed",
 						"Server and client have incompatible versions. See "
 								+ "the FAQ on the Remuco web site"
@@ -597,9 +533,9 @@ public final class Connection implements Runnable, IOptionListener {
 			if (readAndCompare(SUFFIX) < 0) {
 				Log.ln("[CN] IO suffix differs");
 				downPrivate();
-				url = null; // suppress reconnecting;
+				reconnect = false; // suppress reconnecting
 				throw new UserException("Connecting failed",
-						"Received a malformed hello message from the server.");
+						"Received a malformed hello message.");
 			}
 
 			Log.ln("[CN] rx'ed hello message");
@@ -608,8 +544,7 @@ public final class Connection implements Runnable, IOptionListener {
 			Log.ln("[CN] rx'ing hello msg failed", e);
 			downPrivate();
 			throw new UserException("Connecting failed",
-					"There was an IO error while receiving the hello message "
-							+ "from the server.", e);
+					"IO error while receiving the hello message.", e);
 		}
 
 		final Message msgCI = new Message();
@@ -622,8 +557,7 @@ public final class Connection implements Runnable, IOptionListener {
 		} catch (IOException e) {
 			downPrivate();
 			throw new UserException("Connecting failed",
-					"There was an IO error while sending client description.",
-					e);
+					"IO error while sending client description.", e);
 		}
 
 		final Message msgPI = recv();

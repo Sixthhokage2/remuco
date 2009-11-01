@@ -18,56 +18,51 @@
  *   along with Remuco.  If not, see <http://www.gnu.org/licenses/>.
  *   
  */
-package remuco;
+package remuco.client.jme.ui.screens;
 
-import javax.microedition.midlet.MIDlet;
-import javax.microedition.midlet.MIDletStateChangeException;
+import java.util.Enumeration;
+import java.util.Hashtable;
+import java.util.Vector;
 
-import remuco.client.common.util.Log;
+import javax.microedition.lcdui.List;
 
-public class Entry extends MIDlet {
+public class ServiceSelectorScreen extends List {
 
-	private Remuco remuco;
+	private final Vector urls;
 
-	protected void destroyApp(boolean unconditional)
-			throws MIDletStateChangeException {
+	public ServiceSelectorScreen() {
 
-		remuco.destroy();
-		remuco = null;
-		MainLoop.disable();
+		super("Media Players", List.IMPLICIT);
 
-		Log.ln("[EN] managed exit");
+		urls = new Vector();
+
 	}
 
 	/**
-	 * Same as {@link #notifyDestroyed()} but does additional clean up.
+	 * Get the selected service.
+	 * 
+	 * @return the service URL
 	 */
-	protected void notifyExit() {
+	public String getSelectedService() {
 
-		remuco = null;
-		MainLoop.disable();
+		final int index = getSelectedIndex();
 
-		Log.ln("[EN] user exit");
-		
-		notifyDestroyed();
-		
-	}
-
-	protected void pauseApp() {
-
-		Log.ln("[EN] paused");
+		return (String) urls.elementAt(index);
 
 	}
 
-	protected void startApp() throws MIDletStateChangeException {
+	public void setServices(Hashtable services) {
 
-		MainLoop.enable();
+		deleteAll();
 
-		if (remuco == null) {
-			remuco = new Remuco(this);
-			Log.ln("[EN] started");
-		} else {
-			Log.ln("[EN] resumed");
+		urls.removeAllElements();
+
+		final Enumeration e = services.keys();
+
+		while (e.hasMoreElements()) {
+			final String name = (String) e.nextElement();
+			append(name, null);
+			urls.addElement(services.get(name));
 		}
 
 	}

@@ -42,17 +42,18 @@ import javax.microedition.rms.RecordStoreFullException;
 import javax.microedition.rms.RecordStoreNotFoundException;
 import javax.microedition.rms.RecordStoreNotOpenException;
 
-import remuco.comm.BluetoothDevice;
+import remuco.client.common.data.ClientInfo;
+import remuco.client.common.serial.Serial;
+import remuco.client.common.util.Log;
+import remuco.client.common.util.Tools;
+import remuco.client.jme.io.BluetoothDevice;
+import remuco.client.jme.ui.KeyBindings;
+import remuco.client.jme.ui.Theme;
+import remuco.client.jme.ui.screenies.TitleScreeny;
+import remuco.client.jme.ui.screens.PlayerScreen;
 import remuco.comm.Connection;
 import remuco.comm.IDevice;
-import remuco.comm.Serial;
 import remuco.comm.WifiDevice;
-import remuco.ui.KeyBindings;
-import remuco.ui.Theme;
-import remuco.ui.screenies.TitleScreeny;
-import remuco.ui.screens.PlayerScreen;
-import remuco.util.Log;
-import remuco.util.Tools;
 
 /**
  * Config provides global access to various configuration options.
