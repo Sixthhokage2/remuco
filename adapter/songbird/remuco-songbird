@@ -1,0 +1,92 @@
+#!/usr/bin/python
+
+# =============================================================================
+#
+#    Remuco - A remote control system for media players.
+#    Copyright (C) 2006-2010 by the Remuco team, see AUTHORS.
+#
+#    This file is part of Remuco.
+#
+#    Remuco is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    Remuco is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with Remuco.  If not, see <http://www.gnu.org/licenses/>.
+#
+# =============================================================================
+
+"""Remuco player adapter for Songbird, implemented as an executable script."""
+
+import dbus
+from dbus.exceptions import DBusException
+import gobject
+import urllib
+
+import remuco
+from remuco import log
+
+# =============================================================================
+# player adapter
+# =============================================================================
+
+class SongbirdAdapter(remuco.MPRISAdapter):
+    
+    def __init__(self):
+        
+        remuco.MPRISAdapter.__init__(self, "songbird", "Songbird")
+        
+    # =========================================================================
+    # request interface 
+    # =========================================================================
+    
+    def request_playlist(self, reply):
+        
+        # Getting the playlist from Songbird is very slow. Further there are no
+        # playlist actions possible right now -> don't send the playlist.
+        
+        reply.ids = ["X"]
+        reply.names = ["Not yet available, maybe in a later version of the Songbird adapter"]
+        reply.send() # no playlist actions right now, 
+        
+    # =========================================================================
+    # internal methods (overridden to fix MPRIS issues) 
+    # =========================================================================
+    
+    def _notify_track(self, track):
+        
+        # The Songbird MPRIS extension does not provide real URLs in the
+        # meta data's location entry. Until this is fixed, quote the location
+        # here.
+        
+        if track and "location" in track:
+            
+            loc = track["location"]
+            try:
+                loc = loc.encode("UTF8")
+            except UnicodeDecodeError:
+                pass # not a unicode string
+            
+            loc = urllib.quote(loc, ":/%") # '%' prevents double quoting
+            
+            track["location"] = loc
+        
+        remuco.MPRISAdapter._notify_track(self, track)
+        
+# =============================================================================
+# main
+# =============================================================================
+
+if __name__ == '__main__':
+
+    pa = SongbirdAdapter()
+    mg = remuco.Manager(pa, player_dbus_name="org.mpris.songbird")
+    
+    mg.run()
+
