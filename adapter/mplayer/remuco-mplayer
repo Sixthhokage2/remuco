@@ -1,0 +1,385 @@
+#!/usr/bin/python
+
+# =============================================================================
+#
+#    Remuco - A remote control system for media players.
+#    Copyright (C) 2006-2010 by the Remuco team, see AUTHORS.
+#
+#    This file is part of Remuco.
+#
+#    Remuco is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    Remuco is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with Remuco.  If not, see <http://www.gnu.org/licenses/>.
+#
+# =============================================================================
+
+# Some remote control related documentation for MPlayer is available at
+# http://www.mplayerhq.hu/DOCS/tech/slave.txt
+# To parse the status line, read
+# http://www.mplayerhq.hu/DOCS/HTML/en/faq.html#id2734829
+
+"""MPlayer adapter for Remuco, implemented as an executable script."""
+
+import os
+import os.path
+import gobject
+import re
+import sys
+import subprocess
+
+import remuco
+from remuco import log
+from remuco.defs import *
+
+from remuco import testshell
+
+FA_APPEND = remuco.ItemAction("Append")
+FA_PLAY = remuco.ItemAction("Play")
+
+FILE_ACTIONS = (FA_APPEND, FA_PLAY)
+
+MODE_INDEPENDENT = 1 << 0
+MODE_MASTER = 1 << 1
+
+class MplayerAdapter(remuco.PlayerAdapter):
+
+    def __init__(self, filelist=None):
+
+        remuco.PlayerAdapter.__init__(self, "MPlayer",
+            progress_known=True,
+            file_actions=FILE_ACTIONS,
+            mime_types=("audio", "video"))
+
+        self.__mode = MODE_INDEPENDENT
+
+        if filelist is not None:
+
+            self.filelist = filelist
+            self.__mode = MODE_MASTER
+
+        # TODO put this somewhere else
+        if self.__mode is MODE_INDEPENDENT:
+            self.cmdfifo = os.path.join(self.config.cache, "mplayer.cmdfifo")
+            self.cmdfifo = self.config.getx("cmdfifo", self.cmdfifo)
+
+            self.statusfifo = os.path.join(self.config.cache, "mplayer.statusfifo")
+            self.statusfifo = self.config.getx("statusfifo", self.statusfifo)
+
+        # file descriptors
+        [self.fd_cmd_stream_in, self.fd_cmd_stream_out,
+            self.fd_status_stream_in, self.fd_status_stream_out] = [None]*4
+
+        # gobject's watches:
+        self.watch_id = None # read from mplayer using statusfifo
+        self.watch_death = None # wait for mplayer exit (MODE_MASTER)
+
+        # compile regexes to be used when parsing the status string
+        # in __inputevent()
+        # TODO use a generic self.current_regex pointing to either one
+        # of video_regex or audio_regex and update it whenever the current
+        # file in the playlist changes.
+        # NOTE there is a space char after every information
+        # NOTE audio_regex contains a "pretty position" which looks like:
+        #   ([[HH:]MM:]SS.d)
+        #   i wonder how far does it go...
+        self.video_regex = re.compile(
+            r"""^A:\s*(?P<rawaudiopos>\d+\.\d)\s # audio position (seconds)
+            V:\s*(?P<rawvideopos>\d+\.\d)\s # video position (seconds)
+            A-V:\s*(?P<delay>-?\d+\.\d+)\s # video position (seconds)
+            (?P<videoregex>) # identify this regex uniquely
+            """, re.VERBOSE)
+        self.audio_regex = re.compile(
+            r"""^A:\s*(?P<rawaudiopos>\d+\.\d)\s # raw position (seconds)
+            \((?P<praudiopos>(\d\d:)*\d\d\.\d)\)\s # pretty position
+            of (?P<rawtotal>\d+\.\d)\s # total length in seconds
+            \((?P<prtotal>(\d\d:)*\d\d\.\d)\)\s # pretty total
+            (?P<audioregex>) # identifier
+            """, re.VERBOSE)
+        self.info_regex = re.compile(
+            r"""^ANS_(?P<infovar>[A-Za-z_]+)=  # information name
+            (?P<infovalue>('.*'|\d+\.\d+)) # if quoted, str. else, number
+            (?P<inforegex>) # identifier
+            """, re.VERBOSE)
+        self.pause_regex = re.compile(r" *===+ +\w+ +===+")
+
+        self.__set_default_info()
+
+    def start(self):
+
+        remuco.PlayerAdapter.start(self)
+
+        self.__setup_streams()
+
+        self.watch_id = gobject.io_add_watch(self.fd_status_stream_in,
+            gobject.IO_IN | gobject.IO_ERR | gobject.IO_HUP,
+            self.__inputevent)
+
+        if self.__mode is MODE_MASTER:
+
+            args = ['mplayer', '-slave', '-input', 'file=/dev/null']
+            args += self.filelist
+
+            self.__mplayer_pid = subprocess.Popen(args, bufsize=1,
+                stdin=self.fd_cmd_stream_in, stdout=self.fd_status_stream_out).pid
+
+            def cb(pid, condition, user_data=None): #local callback for watch_death
+                self.manager.stop()
+
+            self.watch_death = gobject.child_watch_add(self.__mplayer_pid, cb)
+
+        log.debug("starting mplayer adapter")
+
+    def stop(self):
+
+        # FIXME probable bug: call manager.stop from here,
+        # and the manager will call stop_pa again
+        remuco.PlayerAdapter.stop(self)
+
+        os.closerange(self.fd_cmd_stream_in, self.fd_status_stream_out)
+
+        [self.fd_cmd_stream_in, self.fd_cmd_stream_out,
+            self.fd_status_stream_in, self.fd_status_stream_out] = [None]*4
+
+        if self.watch_id is not None:
+            gobject.source_remove(self.watch_id)
+            self.watch_id = None
+
+        if self.watch_death is not None:
+            gobject.source_remove(self.watch_death)
+            self.watch_death = None
+
+        log.debug("stopping mplayer adapter")
+
+
+    def poll(self):
+
+        # fetch important information from player
+        # NOTE while this fixes most of our problems, it will always
+        # clutter mplayer's output
+        if self.__playback == PLAYBACK_PLAY:
+            self.__command('get_time_length\n')
+            self.__command('get_file_name\n')
+            self.__command('get_property volume\n')
+
+    # =========================================================================
+    # control interface
+    # =========================================================================
+
+    def ctrl_toggle_playing(self):
+        self.__command('pause\n')
+
+    def ctrl_toggle_fullscreen(self):
+        self.__command('vo_fullscreen\n')
+
+    def ctrl_next(self):
+        self.__command('pt_step 1\n')
+        gobject.idle_add(self.poll)
+
+    def ctrl_previous(self):
+        self.__command('pt_step -1\n')
+        gobject.idle_add(self.poll)
+
+    def ctrl_volume(self, direction):
+        self.__command('volume %d %d\n' % (direction, direction==0))
+        gobject.idle_add(self.poll)
+
+    def ctrl_seek(self, direction):
+        self.__command('seek %s0\n' % direction)
+
+    # =========================================================================
+    # request interface
+    # =========================================================================
+
+    #def request_playlist(self, client):
+
+    #    self.reply_playlist_request(client, ["1", "2"],
+    #            ["Joe - Joe's Song", "Sue - Sue's Song"])
+
+    # ...
+
+    # =========================================================================
+    # actions interface
+    # =========================================================================
+
+    def action_files(self, action_id, files, uris):
+
+        if action_id == FA_APPEND.id:
+            for file in files:
+                self.__command('loadfile "%s" 1' % file)
+        elif action_id == FA_PLAY.id:
+            self.__command('loadfile "%s"' % files[0])
+        else:
+            log.error("** BUG ** unexpected action ID")
+
+    # =========================================================================
+    # internal methods
+    # =========================================================================
+
+    def __command(self, cmd):
+        """Write a command to the MPlayer FIFO and handle errors."""
+
+        try:
+            os.write(self.fd_cmd_stream_out, cmd)
+        except OSError, e:
+            log.warning("FIFO to MPlayer broken (%s)", e)
+            self.manager.stop()
+
+    def __read_stream(self, fd):
+        """Read from a file descriptor and handle errors."""
+
+        try:
+            str = os.read(fd, 200) #magic buflength number
+            return str
+        except OSError, e:
+            log.warning("FIFO from MPlayer broken (%s)", e)
+            self.manager.stop()
+
+    def __inputevent(self, fd, condition):
+        """Parse incoming line from the player"""
+
+
+        if condition == gobject.IO_IN:
+            # read from fd (fd is self.fd_status_stream_in)
+            status_str = self.__read_stream(fd)
+
+            if self.pause_regex.search(status_str):
+                self.__playback = PLAYBACK_PAUSE
+                self.update_playback(PLAYBACK_PAUSE)
+                return True
+
+            matchobj = (self.video_regex.match(status_str) or
+                        self.audio_regex.match(status_str) or
+                        self.info_regex.match(status_str))
+
+            if matchobj is not None:
+                self.__playback = PLAYBACK_PLAY
+                self.update_playback(self.__playback)
+
+                current_progress = self.__progress
+                current_length = self.info[INFO_LENGTH]
+
+                identifier = matchobj.lastgroup
+                if identifier == 'videoregex': # we have a video regex
+                    current_progress = float(matchobj.group('rawvideopos'))
+
+                elif identifier == 'inforegex': # info regex
+                    self.__set_info(matchobj.group('infovar'),
+                        matchobj.group('infovalue'))
+                    current_length = self.info[INFO_LENGTH] #avoid a race condition
+
+                elif identifier == 'audioregex': # audio regex
+                    current_progress = float(matchobj.group('rawaudiopos'))
+                    current_length = float(matchobj.group('rawtotal'))
+
+                self.update_progress(current_progress, current_length)
+                self.__progress = current_progress
+                self.info[INFO_LENGTH] = current_length
+
+            return True
+
+        else:
+            if condition == gobject.IO_HUP: # mplayer has probably quit
+                log.info("statusfifo hangup. is mplayer still running?")
+            else:
+                log.error("statusfifo read error")
+
+            self.stop()
+
+            gobject.idle_add(self.start)
+            return False
+
+    def __set_info(self, name, value):
+        """ Set global information of current item
+
+        @param name:
+            The name of the variable in mplayer. (str)
+        @param value:
+            The value mplayer assigns. (str)
+
+        @see self.__inputevent() and self.info_regex for more information
+
+        """
+        if name == 'LENGTH':
+            self.info[INFO_LENGTH] = float(value)
+        elif name == 'FILENAME':
+            self.info[INFO_TITLE] = value.strip("'")
+            self.update_item(self.info[INFO_TITLE], self.info, None)
+        elif name == 'volume': # lower case because we use the get_property command
+            self.update_volume(float(value))
+
+    def __set_default_info(self):
+        """ Set default playback information """
+
+        self.__progress = 0
+        self.__playback = PLAYBACK_STOP
+        self.info = { INFO_LENGTH: 100, INFO_TITLE: '' }
+
+    def __setup_streams(self):
+        """ Setup information streams.
+            This depends on the mode we are running:
+                MODE_INDEPENDENT - uses FIFOs to issue commands and fetch status
+                information
+                MODE_MASTER - uses a newly created pipe to connect to mplayer
+                directly
+        """
+
+
+        if self.__mode is MODE_INDEPENDENT:
+            if not(os.path.exists(self.cmdfifo)):
+                os.mkfifo(self.cmdfifo)
+
+            if not(os.path.exists(self.statusfifo)):
+                os.mkfifo(self.statusfifo)
+            else:
+                log.warning('statusfifo file already exists. this is not a ' +
+                'problem, but you might end up with a big file if ' +
+                self.statusfifo + ' is not a FIFO.')
+
+            log.debug("opening cmdfifo and waiting for mplayer to read it")
+            self.fd_cmd_stream_out = os.open(self.cmdfifo, os.O_WRONLY)
+            self.fd_cmd_stream_in = self.fd_cmd_stream_out
+
+            log.debug("opening statusfifo")
+            self.fd_status_stream_in = os.open(self.statusfifo, os.O_RDONLY | os.O_NONBLOCK)
+            self.fd_status_stream_out = self.fd_status_stream_in
+
+        else: # MODE_MASTER
+            log.debug("creating pipes to communicate with mplayer")
+            self.fd_cmd_stream_in, self.fd_cmd_stream_out  = os.pipe()
+            self.fd_status_stream_in, self.fd_status_stream_out  = os.pipe()
+
+
+
+# =============================================================================
+# main
+# =============================================================================
+
+if __name__ == '__main__':
+
+    filepaths = None
+
+    # TODO use 'optparser' module instead
+    if sys.argv.__len__() > 1:
+        filepaths = []
+
+        # TODO parse arguments looking for mplayer options
+
+        #parse arguments looking for video files
+        for arg in sys.argv[1:]:
+            if os.path.isfile(arg): filepaths.append(arg)
+
+    pa = MplayerAdapter(filepaths) # create the player adapter
+    mg = remuco.Manager(pa) # pass it to a manager
+
+    testshell.setup(pa)
+    mg.run() # run the manager (blocks until interrupt signal)
+
