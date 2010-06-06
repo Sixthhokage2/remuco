@@ -353,6 +353,7 @@ class PlayerAdapter(object):
         * ctrl_volume()
         * ctrl_rate()
         * ctrl_tag()
+        * ctrl_navigate()
         
         * action_files()
         * action_playlist_item()
@@ -734,6 +735,16 @@ class PlayerAdapter(object):
 
         @note: Override if it is possible and makes sense.
                
+        """
+        log.error("** BUG ** in feature handling")
+
+    def ctrl_navigate(self, action):
+        """Navigate through menus
+
+        @param action:
+            Navigation decision:
+            UP, DOWN, LEFT, RIGHT, SELECT, RETURN, TOPMENU
+
         """
         log.error("** BUG ** in feature handling")
     
@@ -1320,7 +1331,14 @@ class PlayerAdapter(object):
                 return
             
             self.ctrl_tag(tag.id, tag.tags)
-            
+
+        elif id == message.CTRL_NAVIGATE:
+            control = serial.unpack(Control, bindata)
+            if control is None:
+                return
+
+            self.ctrl_navigate(control.param)
+
         elif id == message.CTRL_FULLSCREEN:
             
             self.ctrl_toggle_fullscreen()

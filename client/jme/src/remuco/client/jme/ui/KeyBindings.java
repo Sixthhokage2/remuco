@@ -42,7 +42,10 @@ public final class KeyBindings {
 			ACTION_PREV = 2, ACTION_VOLUP = 3, ACTION_VOLDOWN = 4,
 			ACTION_VOLMUTE = 5, ACTION_RATEUP = 6, ACTION_RATEDOWN = 7,
 			ACTION_EDITTAGS = 8, ACTION_IMAGE = 9, ACTION_REPEAT = 10,
-			ACTION_SHUFFLE = 11, ACTION_FULLSCREEN = 12, ACTION_COUNT = 13;
+			ACTION_SHUFFLE = 11, ACTION_FULLSCREEN = 12,
+			ACTION_NAVUP = 13, ACTION_NAVDOWN = 14, ACTION_NAVLEFT = 15,
+			ACTION_NAVRIGHT = 16, ACTION_NAVSELECT = 17, ACTION_NAVRETURN = 18,
+			ACTION_NAVTOPMENU = 19, ACTION_COUNT = 20;
 
 	/**
 	 * Mapping of action codes to their names.
@@ -50,7 +53,9 @@ public final class KeyBindings {
 	public static final String[] actionNames = new String[] { "Toggle playing",
 			"Next", "Previous", "Volume up", "Volume down", "Volume mute",
 			"Rate up", "Rate down", "Edit tags", "Show image", "Toggle repeat",
-			"Toggle shuffle", "Toggle fullscreen" };
+			"Toggle shuffle", "Toggle fullscreen",
+			"Navigate up", "Navigate down", "Navigate left", "Navigate right",
+			"Select item", "Previous menu", "Top menu" };
 
 	/**
 	 * Get the key bindings instance. <em>Must not</em> get called from a static
