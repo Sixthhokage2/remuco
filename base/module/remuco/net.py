@@ -1,7 +1,7 @@
 # =============================================================================
 #
 #    Remuco - A remote control system for media players.
-#    Copyright (C) 2006-2009 by the Remuco team, see AUTHORS.
+#    Copyright (C) 2006-2010 by the Remuco team, see AUTHORS.
 #
 #    This file is part of Remuco.
 #
@@ -33,6 +33,7 @@ from remuco import message
 from remuco import report
 from remuco import serial
 from remuco.data import ClientInfo
+from remuco.remos import zc_publish, zc_unpublish
 
 def build_message(id, serializable):
     """Create a message ready to send on a socket.
@@ -94,6 +95,7 @@ class ClientConnection(object):
         
         # client info
         self.info = ClientInfo()
+        self.__psave = False
         
         # the following fields are used for iterative receiving on message data
         # see io_recv() and io_recv_buff()
@@ -217,6 +219,16 @@ class ClientConnection(object):
             
             log.debug("received ignore msg (probably a ping)")
             
+        elif msg_id == message.CONN_SLEEP:
+            
+            self.__psave = True
+            
+        elif msg_id == message.CONN_WAKEUP:
+            
+            self.__psave = False
+            
+            self.__msg_handler_fn(self, message.PRIV_INITIAL_SYNC, None)
+            
         elif msg_id == message.CONN_CINFO:
             
             log.debug("received client info from %s" % self)
@@ -303,6 +315,10 @@ class ClientConnection(object):
         
         if self.__sock is None:
             log.debug("cannot send message to %s, already disconnected" % self)
+            return
+
+        if self.__psave:
+            log.debug("%s is in sleep mode, send nothing" % self)
             return
 
         self.__snd_buff = "%s%s" % (self.__snd_buff, msg)
@@ -518,8 +534,15 @@ class WifiServer(_Server):
         sock.bind(('', self._config.wifi_port))
         sock.listen(1)
         
+        zc_publish(self._pinfo.name, sock.getsockname()[1])
+        
         return sock
 
     def _get_type(self):
         return "wifi"
+
+    def down(self):
+    
+        zc_unpublish()
+        super(WifiServer, self).down()
 

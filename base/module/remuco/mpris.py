@@ -1,7 +1,7 @@
 # =============================================================================
 #
 #    Remuco - A remote control system for media players.
-#    Copyright (C) 2006-2009 by the Remuco team, see AUTHORS.
+#    Copyright (C) 2006-2010 by the Remuco team, see AUTHORS.
 #
 #    This file is part of Remuco.
 #
@@ -22,14 +22,18 @@
 
 import os.path
 
-import dbus
-from dbus.exceptions import DBusException
 import gobject
 
 from remuco.adapter import PlayerAdapter, ItemAction
 from remuco.defs import *
 from remuco import log
 
+try:
+    import dbus
+    from dbus.exceptions import DBusException
+except ImportError:
+    log.warning("dbus not available - MPRIS based player adapters will crash")
+    
 # =============================================================================
 # MPRIS constants
 # =============================================================================
@@ -58,7 +62,7 @@ FILE_ACTIONS = (IA_APPEND, IA_APPEND_PLAY)
 
 IA_JUMP = ItemAction("Jump to") # __jump_to() is ambiguous on dynamic playlists  
 IA_REMOVE = ItemAction("Remove", multiple=True)
-PLAYLIST_ACTIONS = (IA_REMOVE, )
+PLAYLIST_ACTIONS = [IA_REMOVE]
 
 # =============================================================================
 # player adapter
@@ -89,8 +93,11 @@ class MPRISAdapter(PlayerAdapter):
                                file_actions=all_file_actions,
                                mime_types=mime_types)
         
-        self.__playlist_actions = (PLAYLIST_ACTIONS +
-                                   tuple(extra_playlist_actions or ()))
+        self.__playlist_actions = PLAYLIST_ACTIONS
+        if self.config.getx("playlist-jump-enabled", "0", int):
+            self.__playlist_actions.append(IA_JUMP)
+        if extra_playlist_actions:
+            self.__playlist_actions.extend(extra_playlist_actions)
          
         self.__name = name
         
@@ -486,7 +493,7 @@ class MPRISAdapter(PlayerAdapter):
     def __jump_to(self, position):
         """Jump to a position in the tracklist.
         
-        MPRIS has no such method and this a workaround. Unfortunately if
+        MPRIS has no such method, this is a workaround. Unfortunately it
         behaves not as expected on dynamic playlists.
         
         """

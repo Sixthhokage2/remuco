@@ -1,7 +1,7 @@
 # =============================================================================
 #
 #    Remuco - A remote control system for media players.
-#    Copyright (C) 2006-2009 by the Remuco team, see AUTHORS.
+#    Copyright (C) 2006-2010 by the Remuco team, see AUTHORS.
 #
 #    This file is part of Remuco.
 #
@@ -22,12 +22,20 @@
 
 """Exaile adapter for Remuco, implemented as an Exaile plugin."""
 
+from __future__ import with_statement
+
+import os.path
 import re
 
 import gobject
 
 import xl.event
 import xl.settings
+
+try:
+    from xl.cover import NoCoverFoundException # exaile 3.0
+except ImportError:
+    class NoCoverFoundException(Exception): pass # exaile 3.1
 
 import remuco
 from remuco import log
@@ -184,7 +192,10 @@ class ExaileAdapter(remuco.PlayerAdapter):
         
         pos = self.__ex.player.get_time()
         pos = pos + direction * 5
-        pos = min(pos, track.get_duration())
+        if self.__ex.get_version() < "0.3.1":
+            pos = min(pos, track.get_duration())
+        else:
+            pos = min(pos, int(track.get_tag_raw("__length")))
         pos = max(pos, 0)
         
         self.__ex.player.seek(pos)
@@ -281,13 +292,25 @@ class ExaileAdapter(remuco.PlayerAdapter):
 
     def request_search(self, reply, query):
         
-        tracks = None
-        for key, val in zip(SEARCH_MASK, query):
-            val = val.strip()
-            if val:
-                expr = "%s=%s" % (key, val)
-                tracks = self.__ex.collection.search(expr, tracks=tracks)
-                
+        if self.__ex.get_version() < "0.3.1":
+            tracks = None
+            for key, val in zip(SEARCH_MASK, query):
+                val = val.strip()
+                if val:
+                    expr = "%s=%s" % (key, val)
+                    tracks = self.__ex.collection.search(expr, tracks=tracks)
+                    
+            if tracks is None: # empty query, return _all_ tracks
+                tracks = self.__ex.collection.search("", tracks=tracks)
+        else:
+            tml = []
+            for key, val in zip(SEARCH_MASK, query):
+                val = val.strip()
+                if val:
+                    sexpr = "%s=%s" %  (key.lower(), val)
+                    tml.append(xl.trax.TracksMatcher(sexpr, case_sensitive=False))
+            tracks = xl.trax.search_tracks(self.__ex.collection, tml)
+
         reply.ids, reply.names = self.__tracklist_to_itemlist(tracks)
         reply.item_actions = SEARCH_ACTIONS
         reply.send()
@@ -418,32 +441,42 @@ class ExaileAdapter(remuco.PlayerAdapter):
         """Update meta information of current track."""
         
         def get_tag(key):
-            val = track.get_tag(key)
-            if val:
-                try:
-                    val = val[0]
-                except IndexError:
-                    pass
-            return val
+            if self.__ex.get_version() < "0.3.1":
+                val = track.get_tag(key)
+            else: # Exaile >= 0.3.1
+                val = track.get_tag_raw(key)
+            return val and (isinstance(val, list) and val[0] or val) or None
         
-        if track is None:
-            id = None
-            info = None
-            img = None
-        else:
-            id = track.get_loc()
+        id = None
+        info = None
+        img = None
+        
+        if track:
+            id = track.get_loc_for_io()
             info = {}
             info[remuco.INFO_ARTIST] = get_tag("artist")
             info[remuco.INFO_ALBUM] = get_tag("album")
             info[remuco.INFO_TITLE] = get_tag("title")
             info[remuco.INFO_YEAR] = get_tag("date")
             info[remuco.INFO_GENRE] = get_tag("genre")
-            info[remuco.INFO_BITRATE] = track.get_bitrate().replace('k','')
             info[remuco.INFO_RATING] = track.get_rating()
-            info[remuco.INFO_LENGTH] = track.get_duration()
-            img = track.get_tag("arturl")
-            if not img:
-                img = self.find_image(id)
+            if self.__ex.get_version() < "0.3.1":
+                info[remuco.INFO_BITRATE] = track.get_bitrate().replace('k','')
+                info[remuco.INFO_LENGTH] = track.get_duration()
+                try:
+                    img = self.__ex.covers.get_cover(track)
+                except NoCoverFoundException: # exaile 0.3.0 only
+                    pass
+            else: # Exaile >= 0.3.1
+                info[remuco.INFO_BITRATE] = get_tag("__bitrate") // 1000
+                info[remuco.INFO_LENGTH] = int(get_tag("__length"))
+                idata = self.__ex.covers.get_cover(track, set_only=True)
+                if idata:
+                    img = os.path.join(self.config.cache, "exaile.cover")
+                    with open(img, "w") as fp:
+                        fp.write(idata)
+            if not img and track.local_file_name(): # loc_for_io may be != UTF-8
+                img = self.find_image(track.local_file_name())
             
         self.update_item(id, info, img)
         
@@ -461,7 +494,10 @@ class ExaileAdapter(remuco.PlayerAdapter):
             len = 0
             pos = 0
         else:
-            len = track.get_duration()
+            if self.__ex.get_version() < "0.3.1":
+                len = track.get_duration()
+            else: # Exaile >= 0.3.1
+                len = int(track.get_tag_raw("__length"))
             pos = self.__ex.player.get_time()
         
         self.update_progress(pos, len)
@@ -486,42 +522,41 @@ class ExaileAdapter(remuco.PlayerAdapter):
         
         handled = True
         
-        track_list = self.__ex.collection.get_tracks_by_locs(ids)
-        try:
-            while True:
-                track_list.remove(None)
-        except ValueError:
-            pass
+        tracks = self.__ex.collection.get_tracks_by_locs(ids)
+        tracks = [t for t in tracks if t is not None]
         
         if action_id == IA_ENQUEUE.id:
-            self.__ex.queue.add_tracks(track_list)
+            self.__ex.queue.add_tracks(tracks)
         elif action_id == IA_APPEND.id:
-            self.__ex.queue.current_playlist.add_tracks(track_list)
+            self.__ex.queue.current_playlist.add_tracks(tracks)
         elif action_id == IA_REPLACE.id:
-            self.__ex.queue.current_playlist.set_tracks(track_list)
+            self.__ex.queue.current_playlist.set_tracks(tracks)
         elif action_id == IA_NEW_PLAYLIST.id:
             self.__ex.gui.main.add_playlist()
-            self.__ex.queue.current_playlist.add_tracks(track_list)
+            self.__ex.queue.current_playlist.add_tracks(tracks)
         else:
             handled = False
         
         return handled
     
-    def __tracklist_to_itemlist(self, track_list):
+    def __tracklist_to_itemlist(self, tracks):
         """Convert a list if track objects to a Remuco item list."""
         
         ids = []
         names = []
         
-        for track in track_list:
-            
-            ids.append(track.get_loc())
-            artist = track.get_tag("artist")
-            if artist:
-                artist = artist[0]
-            title = track.get_tag("title")
-            if title:
-                title = title[0]
+        for track in tracks:
+            # first, check if track is a SearchResultTrack (since Exaile 0.3.1)
+            track = hasattr(track, "track") and track.track or track
+            ids.append(track.get_loc_for_io())
+            if self.__ex.get_version() < "0.3.1":
+                artist = track.get_tag("artist")
+                title = track.get_tag("title")
+            else:
+                title = track.get_tag_raw("title")
+                artist = track.get_tag_raw("artist")
+            artist = artist and artist[0] or None
+            title = title and title[0] or None
             name = "%s - %s" % (artist or "???", title or "???") 
             names.append(name)
         
@@ -573,7 +608,7 @@ class ExaileAdapter(remuco.PlayerAdapter):
 # plugin interface
 # =============================================================================
     
-EA = None
+epa = None
 
 def enable(exaile):
     if exaile.loading:
@@ -582,15 +617,15 @@ def enable(exaile):
         _enable("exaile_loaded", exaile, None)
 
 def _enable(event, exaile, nothing):
-    global EA
-    EA = ExaileAdapter(exaile)
-    EA.start()
+    global epa
+    epa = ExaileAdapter(exaile)
+    epa.start()
 
 def disable(exaile):
-    global EA
-    if EA:
-        EA.stop()
-        EA = None
+    global epa
+    if epa:
+        epa.stop()
+        epa = None
 
 def teardown(exaile):
     # teardown and disable are the same here

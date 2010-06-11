@@ -1,7 +1,7 @@
 # =============================================================================
 #
 #    Remuco - A remote control system for media players.
-#    Copyright (C) 2006-2009 by the Remuco team, see AUTHORS.
+#    Copyright (C) 2006-2010 by the Remuco team, see AUTHORS.
 #
 #    This file is part of Remuco.
 #
@@ -20,35 +20,36 @@
 #
 # =============================================================================
 
+"""Manage life cycle of stand-alone (not plugin based) player adapters."""
+
 import signal
 
-import dbus
-from dbus.exceptions import DBusException
-from dbus.mainloop.glib import DBusGMainLoop
 import gobject
 
 from remuco import log
 
+try:
+    import dbus
+    from dbus.exceptions import DBusException
+    from dbus.mainloop.glib import DBusGMainLoop
+except ImportError:
+    log.warning("dbus not available - dbus using player adapters will crash")
+
+# =============================================================================
+# global items and signal handling
+# =============================================================================
+
 _ml = None
 
 def _sighandler(signum, frame):
-    """Used by Manager. """
     
     log.info("received signal %i" % signum)
     if _ml is not None:
         _ml.quit()
 
-def _init_main_loop():
-    """Used by Manager. """
-    
-    global _ml
-    
-    if _ml is None:
-        _ml = gobject.MainLoop()
-        signal.signal(signal.SIGINT, _sighandler)
-        signal.signal(signal.SIGTERM, _sighandler)
-    
-    return _ml
+# =============================================================================
+# start stop functions
+# =============================================================================
 
 def _start_pa(pa):
     """Start the given player adapter with error handling."""
@@ -77,23 +78,69 @@ def _stop_pa(pa):
     else:
         log.info("player adapter stopped")
 
+# =============================================================================
+# Polling Observer
+# =============================================================================
+
+class _PollingObserver():
+    """Polling based observer for a player's run state.
+    
+    A polling observer uses a custom function to periodically check if a media
+    player is running and automatically starts and stops the player adapter
+    accordingly.
+    
+    """
+    def __init__(self, pa, poll_fn):
+        """Create a new polling observer.
+        
+        @param pa:
+            the PlayerAdapter to automatically start and stop
+        @param poll_fn:
+            the function to call periodically to check if the player is running
+            
+        """
+        self.__pa = pa
+        self.__poll_fn = poll_fn
+        self.__sid = gobject.timeout_add(5123, self.__poll, False)
+        
+        gobject.idle_add(self.__poll, True)
+        
+    def __poll(self, first):
+        
+        running = self.__poll_fn()
+        if running and self.__pa.stopped:
+            _start_pa(self.__pa)
+        elif not running and not self.__pa.stopped:
+            _stop_pa(self.__pa)
+        # else: nothing to do
+        
+        return first and False or True
+        
+    def stop(self):
+        
+        gobject.source_remove(self.__sid)
+
+# =============================================================================
+# DBus Observer
+# =============================================================================
 
 class _DBusObserver():
-    """Helper class used by Manager.
+    """DBus based observer for a player's run state.
     
-    A DBus observer automatically starts and stops a player adapter if the
-    corresponding media player starts or stops.
+    A DBus observer uses DBus name owner change notifications to
+    automatically start and stop a player adapter if the corresponding
+    media player starts or stops.
+    
     """
-    
     def __init__(self, pa, dbus_name):
-        """ Create a new DBusManager.
+        """Create a new DBus observer.
         
         @param pa:
             the PlayerAdapter to automatically start and stop
         @param dbus_name:
             the bus name used by the adapter's media player
+            
         """
-
         DBusGMainLoop(set_as_default=True)
 
         self.__pa = pa
@@ -115,90 +162,100 @@ class _DBusObserver():
         try:
             self.__handlers = (
                 self.__dbus.connect_to_signal("NameOwnerChanged",
-                                              self.__notify_owner_change,
-                                              arg0=self.__dbus_name)
-                ,
+                                              self.__on_owner_change,
+                                              arg0=self.__dbus_name),
             )
             self.__dbus.NameHasOwner(self.__dbus_name,
-                                     reply_handler=self.__set_has_owner,
+                                     reply_handler=self.__reply_has_owner,
                                      error_handler=self.__dbus_error)
         except DBusException, e:
             log.error("failed to talk with dbus daemon (%s)" % e)
             return
         
-    def __notify_owner_change(self, name, old, new):
+    def __on_owner_change(self, name, old, new):
         
         log.debug("dbus name owner changed: '%s' -> '%s'" % (old, new))
         
         _stop_pa(self.__pa)
-        
-        if not new:
-            return
-        
-        _start_pa(self.__pa)
+        if new:
+            _start_pa(self.__pa)
     
-    def __set_has_owner(self, has_owner):
+    def __reply_has_owner(self, has_owner):
         
         log.debug("dbus name has owner: %s" % has_owner)
-
-        if not has_owner:
-            return
         
-        _start_pa(self.__pa)
+        if has_owner:
+            _start_pa(self.__pa)
     
     def __dbus_error(self, error):
+        
         log.warning("dbus error: %s" % error)
         
-    def disconnect(self):
+    def stop(self):
         
         for handler in self.__handlers:
             handler.remove()
-            
         self.__handlers = ()
-        
         self.__dbus = None
 
+# =============================================================================
+# Manager
+# =============================================================================
+
 class Manager(object):
-    """ Manages life cycle of a player adapter.
+    """Life cycle manager for a stand-alone player adapter.
     
-    A Manager cares about calling a PlayerAdapter's start and stop methods.
+    A manager cares about calling a PlayerAdapter's start and stop methods.
     Additionally, because Remuco needs a GLib main loop to run, it sets up and
     manages such a loop.
     
     It is intended for player adapters running stand-alone, outside the players
-    they adapt. A Manager is not needed for player adapters realized as a
+    they adapt. A manager is not needed for player adapters realized as a
     plugin for a media player. In that case the player's plugin interface
     should care about the life cycle of a player adapter (see the Rhythmbox
     player adapter as an example).
     
-    To activate a manager call run().
-    
     """
-    
-    def __init__(self, pa, player_dbus_name=None):
-        """Create a new Manager.
+    def __init__(self, pa, dbus_name=None, poll_fn=None):
+        """Create a new manager.
         
         @param pa:
             the PlayerAdapter to manage
-        @keyword player_dbus_name:
+        @keyword dbus_name:
             if the player adapter uses DBus to communicate with its player set
             this to the player's well known bus name (see run() for more
             information)
+        @keyword poll_fn:
+            if DBus is not used, this function may be set for periodic checks
+            if the player is running, used to automatically start and stop the
+            player adapter
+        
+        When neither `dbus_name` nor `poll_fn` is given, the adapter is started
+        immediately, assuming the player is running and the adapter is ready to
+        work.
+        
         """
-
         self.__pa = pa
         self.__pa.manager = self
-        
         self.__stopped = False
+        self.__observer = None
         
-        self.__ml = _init_main_loop()
+        global _ml
+        if _ml is None:
+            _ml = gobject.MainLoop()
+            signal.signal(signal.SIGINT, _sighandler)
+            signal.signal(signal.SIGTERM, _sighandler)
+        self.__ml = _ml
 
-        if player_dbus_name is None:
-            self.__dbus_observer = None
-        else:
+        if dbus_name:
             log.info("start dbus observer")
-            self.__dbus_observer = _DBusObserver(pa, player_dbus_name)
-            log.info("dbus observer started")
+            self.__observer = _DBusObserver(pa, dbus_name)
+        elif poll_fn:
+            log.info("start polling observer")
+            self.__observer = _PollingObserver(pa, poll_fn)
+        else:
+            # nothing to do
+            pass
         
     def run(self):
         """Activate the manager.
@@ -207,56 +264,56 @@ class Manager(object):
         blocks until SIGINT or SIGTERM arrives or until stop() gets called. If
         this happens the player adapter gets stopped and this method returns.
         
-        @note: If the keyword 'player_dbus_name' has been set in __init__(),
-            then the player adapter does not get started until an application
-            owns the bus name given by 'player_dbus_name'. It automatically
-            gets started whenever the DBus name has an owner (which means the
-            adapter's player is running) and it gets stopped when it has no
-            owner. Obvisously here the player adapter may get started and
-            stopped repeatedly while this method is running.
+        If `player_dbus_name` or `poll_fn` has been passed to __init__(), then
+        the player adapter does not get started until the player is running
+        (according to checks based on the DBus name or poll function). Also the
+        adapter gets stopped automatically if the player is not running
+        anymore. However, the manager keeps running, i.e. the player adapter
+        may get started and stopped multiple times while this method is
+        running.
         
         """
-        if self.__dbus_observer is None: # start pa directly
+        if self.__observer is None: # start pa directly
             ready = _start_pa(self.__pa)
-        else:
-            # dbus observer will start pa
+        else: # observer will start pa
             ready = True
             
         if ready and not self.__stopped: # not stopped since creation 
-            
             log.info("start main loop")
             try:
                 self.__ml.run()
             except Exception, e:
                 log.exception("** BUG ** %s", e)
-            log.info("main loop stopped")
+            else:
+                log.info("main loop stopped")
             
-        if self.__dbus_observer is not None: # disconnect dbus observer
-            log.info("stop dbus observer")
-            self.__dbus_observer.disconnect()
-            log.info("dbus observer stopped")
+        if self.__observer: # stop observer
+            self.__observer.stop()
+            log.info("observer stopped")
         
         # stop pa
         _stop_pa(self.__pa)
         
     def stop(self):
-        """Manually shut down the manager.
+        """Shut down the manager.
         
         Stops the manager's main loop and player adapter. As a result a
-        previous call to run() will return now.
-        """
+        previous call to run() will return now. This should be used by player
+        adapters when there is a crucial error and restarting the adapter won't
+        fix this.
         
-        log.info("stop manager manually")
+        """
+        log.info("manager stopped internally")
         self.__stopped = True
         self.__ml.quit()
 
-class DummyManager(object):
+class NoManager(object):
     """Dummy manager which can be stopped - does nothing.
     
-    A DummyManager is used for adapters which not yet or not at all have a
-    Manager to ensure it is always safe to call PlayerAdapter.manager.stop().
+    Initially this manager is assigned to every PlayerAdapter. That way it is
+    always safe to call PlayerAdapter.manager.stop() even if an adapter has not
+    yet or not at all a real Manager.
     
     """
-    
     def stop(self):
         """Stop me, I do nothing."""

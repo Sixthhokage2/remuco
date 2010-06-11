@@ -1,0 +1,45 @@
+Developer Info
+==============
+
+Android project
+---------------
+
+Initially this Android project has been created using the following command:
+
+    $ android create project --target 1 --name Remuco --path . \
+          --activity Remuco --package remuco.client.android
+
+The `local.properties` file has been added to `.hgignore`, but an example
+file `local.properties.example` is available in the repository.
+
+IDE vs. Ant
+-----------
+
+Though the Android Eclipse plugin is a good way to develop for Android, the
+`client/android` folder should not contain IDE specific files - it should
+always be possible to build the Android client using the Ant `build.xml` file.
+
+Building the client
+-------------------
+
+    $ cd /path/to/remuco/client/android
+    $ ant debug
+
+Testing the client
+------------------
+
+Start an emulator for an Android 1.5 device:
+
+    $ /path/to/android-sdk/tools/emulator -avd <virtual-android-1.5-device> 
+
+Then install the app:
+
+    $ ant install # or reinstall
+
+Start the Remuco app in the emulated device and connect to `10.0.0.2`
+(localhost of your machine running the emulator).
+
+Installing the client
+---------------------
+
+See <http://code.google.com/p/remuco/wiki/Android>.

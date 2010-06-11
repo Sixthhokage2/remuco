@@ -1,7 +1,7 @@
 # =============================================================================
 #
 #    Remuco - A remote control system for media players.
-#    Copyright (C) 2006-2009 by the Remuco team, see AUTHORS.
+#    Copyright (C) 2006-2010 by the Remuco team, see AUTHORS.
 #
 #    This file is part of Remuco.
 #
@@ -211,13 +211,9 @@ class TotemAdapter(remuco.PlayerAdapter):
     def action_files(self, action_id, files, uris):
         
         if action_id == FA_ENQUEUE.id:
-            ret = subprocess.call(["totem", "--enqueue"] + uris)
-            if ret != os.EX_OK:
-                log.warning("failed to enqueue URIs to playlist")
+            subprocess.Popen(["totem", "--enqueue"] + uris)
         elif action_id == FA_SETPL.id:
-            ret = subprocess.call(["totem", "--replace"] + uris)
-            if ret != os.EX_OK:
-                log.warning("failed to fill playlist with URIs")
+            subprocess.Popen(["totem", "--replace"] + uris)
         else:
             log.error("** BUG ** unexpected action ID")
 
@@ -301,7 +297,7 @@ class TotemAdapter(remuco.PlayerAdapter):
         
         info[remuco.INFO_LENGTH] = int(len / 1000)
         
-        img = self.find_image(mrl, prefer_thumbnail=True)
+        img = self.find_image(mrl)
         
         self.update_item(mrl, info, img)
         

@@ -1,7 +1,7 @@
 # =============================================================================
 #
 #    Remuco - A remote control system for media players.
-#    Copyright (C) 2006-2009 by the Remuco team, see AUTHORS.
+#    Copyright (C) 2006-2010 by the Remuco team, see AUTHORS.
 #
 #    This file is part of Remuco.
 #
@@ -30,6 +30,8 @@ _CONN = 100
 #CONN_PLIST = _CONN
 CONN_PINFO = _CONN + 10
 CONN_CINFO = _CONN + 20
+CONN_SLEEP = _CONN + 30
+CONN_WAKEUP = _CONN + 40
 CONN_BYE = _CONN + 90
 
 # =============================================================================
@@ -57,6 +59,7 @@ CTRL_SHUFFLE = _CTRL + 6
 CTRL_FULLSCREEN = _CTRL + 7
 CTRL_RATE = _CTRL + 8
 CTRL_TAG = _CTRL + 30
+CTRL_NAVIGATE = _CTRL + 40 #31 would be ugly
 CTRL_SHUTDOWN = _CTRL + 90
 
 # =============================================================================
@@ -107,4 +110,4 @@ def is_request(id):
 
 def is_private(id):
     return _is_in_range(_PRIV, id)
-    
+

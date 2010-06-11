@@ -1,7 +1,7 @@
 # =============================================================================
 #
 #    Remuco - A remote control system for media players.
-#    Copyright (C) 2006-2009 by the Remuco team, see AUTHORS.
+#    Copyright (C) 2006-2010 by the Remuco team, see AUTHORS.
 #
 #    This file is part of Remuco.
 #
@@ -20,11 +20,11 @@
 #
 # =============================================================================
 
+import commands
 import inspect
 import math # for ceiling
 import os
 import os.path
-import subprocess
 import urllib
 import urlparse
 
@@ -44,7 +44,7 @@ from remuco.features import *
 from remuco.data import PlayerInfo, PlayerState, Progress, ItemList, Item
 from remuco.data import Control, Action, Tagging, Request
 
-from remuco.manager import DummyManager
+from remuco.manager import NoManager
 
 # =============================================================================
 # reply class for requests
@@ -353,6 +353,7 @@ class PlayerAdapter(object):
         * ctrl_volume()
         * ctrl_rate()
         * ctrl_tag()
+        * ctrl_navigate()
         
         * action_files()
         * action_playlist_item()
@@ -406,6 +407,8 @@ class PlayerAdapter(object):
         * find_image()
         
     '''
+    
+    manager = NoManager()
 
     # =========================================================================
     # constructor 
@@ -465,11 +468,11 @@ class PlayerAdapter(object):
         
         # init config (config inits logging)
         
-        self.__config = config.Config(self.__name)
+        self.config = config.Config(self.__name)
         
         # init misc fields
         
-        serial.Bin.HOST_ENCODING = self.__config.encoding
+        serial.Bin.HOST_ENCODING = self.config.player_encoding
         
         self.__clients = []
         
@@ -490,19 +493,22 @@ class PlayerAdapter(object):
         self.__poll_ival = max(500, int(poll * 1000))
         self.__poll_sid = 0
         
-        self.__stopped = True
+        self.stopped = True
         
         self.__server_bluetooth = None
         self.__server_wifi = None
         
-        if self.__config.fb:
+        if self.config.fb_root_dirs:
             self.__filelib = files.FileSystemLibrary(
-                self.__config.fb_root_dirs, mime_types,
-                use_user_dirs=self.__config.fb_xdg_user_dirs, 
-                show_extensions=self.__config.fb_extensions)
+                self.config.fb_root_dirs, mime_types,
+                self.config.fb_show_extensions, False)
+        else:
+            log.info("file browser is disabled")
             
-        self.__manager = DummyManager()
-        
+        if "REMUCO_TESTSHELL" in os.environ:
+            from remuco import testshell
+            testshell.setup(self)
+
         log.debug("init done")
     
     def start(self):
@@ -512,23 +518,23 @@ class PlayerAdapter(object):
         
         """
         
-        if not self.__stopped:
+        if not self.stopped:
             log.debug("ignore start, already running")
             return
         
-        self.__stopped = False
+        self.stopped = False
         
         # set up server
         
-        if self.__config.bluetooth:
+        if self.config.bluetooth_enabled:
             self.__server_bluetooth = net.BluetoothServer(self.__clients,
-                    self.__info, self.__handle_message, self.__config)
+                    self.__info, self.__handle_message, self.config)
         else:
             self.__server_bluetooth = None
 
-        if self.__config.wifi:
+        if self.config.wifi_enabled:
             self.__server_wifi = net.WifiServer(self.__clients,
-                    self.__info, self.__handle_message, self.__config)
+                    self.__info, self.__handle_message, self.config)
         else:
             self.__server_wifi = None
             
@@ -555,9 +561,9 @@ class PlayerAdapter(object):
         
         """
 
-        if self.__stopped: return
+        if self.stopped: return
         
-        self.__stopped = True
+        self.stopped = True
         
         for c in self.__clients:
             c.disconnect(remove_from_list=False, send_bye_msg=True)
@@ -598,14 +604,14 @@ class PlayerAdapter(object):
     
     def __poll(self):
         
-        if self.config.custom_volume_cmd:
-            self.__update_volume_custom()
+        if self.config.master_volume_enabled:
+            self.__update_volume_master()
         
         try:
             self.poll()
         except NotImplementedError:
-            # poll again if custom volume is used, otherwise not
-            return bool(self.config.custom_volume_cmd)
+            # poll again if master volume is used, otherwise not
+            return self.config.master_volume_enabled
         
         return True
     
@@ -613,7 +619,7 @@ class PlayerAdapter(object):
     # utility methods which may be useful for player adapters
     # =========================================================================
     
-    def find_image(self, resource, prefer_thumbnail=False):
+    def find_image(self, resource):
         """Find a local art image file related to a resource.
         
         This method first looks in the resource' folder for typical art image
@@ -631,7 +637,7 @@ class PlayerAdapter(object):
         
         """
         
-        file = art.get_art(resource, prefer_thumbnail=prefer_thumbnail)
+        file = art.get_art(resource)
         log.debug("image for '%s': %s" % (resource, file))
         return file
     
@@ -735,6 +741,16 @@ class PlayerAdapter(object):
                
         """
         log.error("** BUG ** in feature handling")
+
+    def ctrl_navigate(self, action):
+        """Navigate through menus
+
+        @param action:
+            Navigation decision:
+            UP, DOWN, LEFT, RIGHT, SELECT, RETURN, TOPMENU
+
+        """
+        log.error("** BUG ** in feature handling")
     
     def ctrl_volume(self, direction):
         """Adjust volume. 
@@ -749,29 +765,30 @@ class PlayerAdapter(object):
         """
         log.error("** BUG ** in feature handling")
         
-    def __ctrl_volume_custom(self, direction):
+    def __ctrl_volume_master(self, direction):
         """Adjust volume using custom volume command (instead of player)."""
         
         if direction < 0:
-            arg = "down"
+            cmd = self.config.master_volume_down_cmd
         elif direction > 0:
-            arg = "up"
+            cmd = self.config.master_volume_up_cmd
         else:
-            arg = "mute"
+            cmd = self.config.master_volume_mute_cmd
         
-        self.__util_run_custom_volume_command(arg)
-        
-        gobject.idle_add(self.__update_volume_custom)
+        ret, out = commands.getstatusoutput("sh -c '%s'" % cmd)
+        if ret != os.EX_OK:
+            log.error("master-volume-... failed: %s" % out)
+        else:
+            gobject.idle_add(self.__update_volume_master)
         
     def __ctrl_shutdown_system(self):
         
-        shutdown_cmd = config.get_system_shutdown_command()
-        if shutdown_cmd:
-            log.debug("run shutdown command")
-            try:
-                subprocess.Popen(shutdown_cmd, shell=True)
-            except OSError, e:
-                log.warning("failed to run shutdown command (%s)", e)
+        if self.config.system_shutdown_enabled:
+            log.debug("run system shutdown command")
+            cmd = "sh -c '%s'" % self.config.system_shutdown_cmd
+            ret, out = commands.getstatusoutput(cmd)
+            if ret != os.EX_OK:
+                log.error("system-shutdown failed: %s" % out)
                 return
             self.stop()
 
@@ -863,7 +880,7 @@ class PlayerAdapter(object):
         @note: Override if item actions gets passed to reply_mlib_request().
                 
         """
-        log.error("** BUG ** action_item() not implemented")
+        log.error("** BUG ** action_mlib_item() not implemented")
     
     def action_mlib_list(self, action_id, path):
         """Do an action on a list from the player's media library.
@@ -1064,7 +1081,7 @@ class PlayerAdapter(object):
         @note: Call to synchronize player state with remote clients.
         
         """
-        if self.config.custom_volume_cmd:
+        if self.config.master_volume_enabled:
             # ignore if custom command has been set
             return
         
@@ -1080,20 +1097,22 @@ class PlayerAdapter(object):
             self.__state.volume = volume
             self.__sync_trigger(self.__sync_state)
     
-    def __update_volume_custom(self):
+    def __update_volume_master(self):
         """Set the current volume (use custom command instead of player)."""
 
-        out = self.__util_run_custom_volume_command(None)
+        cmd = "sh -c '%s'" % self.config.master_volume_get_cmd
+        ret, out = commands.getstatusoutput(cmd)
+        if ret != os.EX_OK:
+            log.error("master-volume-get failed: '%s'" % out)
+            return
         try:
             volume = int(out)
+            if volume < 0 or volume > 100:
+                raise ValueError
         except ValueError:
-            log.warning("output of custom volume command malformed: '%s'" % out)
+            log.error("output of master-volume-get malformed: '%s'" % out)
             return
         
-        if volume < 0 or volume > 100:
-            log.warning("bad volume from custom volume command: %d" % volume)
-            volume = 50
-            
         change = self.__state.volume != volume
         
         if change:
@@ -1167,7 +1186,7 @@ class PlayerAdapter(object):
     
     def __sync_trigger(self, sync_fn):
         
-        if self.__stopped:
+        if self.stopped:
             return
         
         if sync_fn in self.__sync_triggers:
@@ -1288,8 +1307,8 @@ class PlayerAdapter(object):
             if control is None:
                 return
             
-            if self.config.custom_volume_cmd:
-                self.__ctrl_volume_custom(control.param)
+            if self.config.master_volume_enabled:
+                self.__ctrl_volume_master(control.param)
             else:
                 self.ctrl_volume(control.param)
             
@@ -1316,7 +1335,14 @@ class PlayerAdapter(object):
                 return
             
             self.ctrl_tag(tag.id, tag.tags)
-            
+
+        elif id == message.CTRL_NAVIGATE:
+            control = serial.unpack(Control, bindata)
+            if control is None:
+                return
+
+            self.ctrl_navigate(control.param)
+
         elif id == message.CTRL_FULLSCREEN:
             
             self.ctrl_toggle_fullscreen()
@@ -1448,7 +1474,7 @@ class PlayerAdapter(object):
             
             ftc(playback_known, FT_KNOWN_PLAYBACK),
             ftc(volume_known, FT_KNOWN_VOLUME),
-            ftc(self.config.custom_volume_cmd, FT_KNOWN_VOLUME),
+            ftc(self.config.master_volume_enabled, FT_KNOWN_VOLUME),
             ftc(repeat_known, FT_KNOWN_REPEAT),
             ftc(shuffle_known, FT_KNOWN_SHUFFLE),
             ftc(progress_known, FT_KNOWN_PROGRESS),
@@ -1457,7 +1483,7 @@ class PlayerAdapter(object):
 
             ftc(self.ctrl_toggle_playing, FT_CTRL_PLAYBACK),
             ftc(self.ctrl_volume, FT_CTRL_VOLUME),
-            ftc(self.config.custom_volume_cmd, FT_CTRL_VOLUME),
+            ftc(self.config.master_volume_enabled, FT_CTRL_VOLUME),
             ftc(self.ctrl_seek, FT_CTRL_SEEK),
             ftc(self.ctrl_tag, FT_CTRL_TAG),
             ftc(self.ctrl_rate, FT_CTRL_RATE),
@@ -1466,6 +1492,7 @@ class PlayerAdapter(object):
             ftc(self.ctrl_next, FT_CTRL_NEXT),
             ftc(self.ctrl_previous, FT_CTRL_PREV),
             ftc(self.ctrl_toggle_fullscreen, FT_CTRL_FULLSCREEN),
+            ftc(self.ctrl_navigate, FT_CTRL_NAVIGATE),
         
             # --- request features ---
 
@@ -1473,7 +1500,7 @@ class PlayerAdapter(object):
             ftc(self.request_queue, FT_REQ_QU),
             ftc(self.request_mlib, FT_REQ_MLIB),
 
-            ftc(config.get_system_shutdown_command(), FT_SHUTDOWN),
+            ftc(self.config.system_shutdown_enabled, FT_SHUTDOWN),
         
         )
         
@@ -1485,83 +1512,3 @@ class PlayerAdapter(object):
         log.debug("flags: %X" % flags)
         
         return flags
-    
-    def __util_run_custom_volume_command(self, arg):
-
-        args = [self.config.custom_volume_cmd]
-        if arg:
-            args.append(arg)
-            
-        try:
-            p = subprocess.Popen(args,
-                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        except OSError, e:
-            log.warning("failed to run custom volume command (%s)" % e)
-            return
-
-        p.wait()
-        out, err = p.communicate()
-        
-        if p.returncode != os.EX_OK:
-            log.warning("failed to run custom volume command:\n%s" % err)
-            return
-        
-        return out
-
-    # =========================================================================
-    # properties 
-    # =========================================================================
-    
-    # === property: clients ===
-    
-    def __pget_clients(self):
-        """A descriptive list of connected clients.
-        
-        May be useful to integrate connected clients in a media player UI.
-
-        """ 
-        l = []
-        for c in self.__clients:
-            l.append(str(c))
-        return l
-    
-    clients = property(__pget_clients, None, None, __pget_clients.__doc__)
-
-    # === property: config ===
-    
-    def __pget_config(self):
-        """Player adapter specific configuration (instance of Config).
-        
-        This mirrors the configuration in ~/.config/remuco/PLAYER/conf. Any
-        change to 'config' is saved immediately into the configuration file.
-        
-        """
-        return self.__config
-    
-    config = property(__pget_config, None, None, __pget_config.__doc__)
-
-    # === property: manager ===
-    
-    def __pget_manager(self):
-        """The Manager controlling this adapter.
-        
-        This property may be used to call the method stop() on to stop and
-        completely shutdown the adapter from within an adapter. Calling
-        Manager.stop() has the same effect as if the Manager process
-        received a SIGINT or SIGTERM. 
-        
-        If this adapter is not controlled by or has not yet assigned a Manager
-        then this property refers to a dummy manager - so it is allways safe
-        to call stop() on this manager.
-        
-        @see: Manager
-        
-        """
-        return self.__manager
-    
-    def __pset_manager(self, value):
-        self.__manager = value
-    
-    manager = property(__pget_manager, __pset_manager, None,
-                       __pget_manager.__doc__)
-

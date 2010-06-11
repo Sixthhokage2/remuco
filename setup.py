@@ -10,6 +10,13 @@ within this script.
 from distutils.core import setup
 import os
 import os.path
+import platform
+
+# used for plugin based adapters which install to /usr/lib...
+if platform.architecture()[0] == "32bit":
+    LIB_DIR = "lib"
+else:
+    LIB_DIR = "lib64"
 
 # =============================================================================
 # specify script and data files for each player adapter (relative file names)
@@ -23,6 +30,12 @@ pa_files = {} # keys are adapter names, values are lists with:
 
 pa_files["amarok"] = [
     ["remuco-amarok"]
+]
+
+# --- Amarok 1.4 --------------------------------------------------------------
+
+pa_files["amarok14"] = [
+    ["remuco-amarok14"]
 ]
 
 # --- Audacious ---------------------------------------------------------------
@@ -72,6 +85,12 @@ pa_files["okular"] = [
     ["remuco-okular"]
 ]
 
+# --- QuodLibet ------------------------------------------------------------------
+
+pa_files["quodlibet"] = [
+    ["remuco-quodlibet"]
+]
+
 # --- Rhythmbox ---------------------------------------------------------------
 
 # set prefix may not be valid for Rhythmbox -> use a Rhythmbox specific prefix:
@@ -79,7 +98,7 @@ PREFIX_RHYTHMBOX = os.getenv("PREFIX_RHYTHMBOX", "/usr/")
 
 pa_files["rhythmbox"] = [
     [],
-    ("%slib/rhythmbox/plugins/remuco" % PREFIX_RHYTHMBOX,
+    ("%s%s/rhythmbox/plugins/remuco" % (PREFIX_RHYTHMBOX, LIB_DIR),
      ["remuco.rb-plugin", "remythm.py"])
 ]
 
@@ -96,7 +115,7 @@ PREFIX_TOTEM = os.getenv("PREFIX_TOTEM", "/usr/")
 
 pa_files["totem"] = [
     [],
-    ("%slib/totem/plugins/remuco" % PREFIX_TOTEM,
+    ("%s%s/totem/plugins/remuco" % (PREFIX_TOTEM, LIB_DIR),
      ["remuco.totem-plugin", "remotem.py"])
 ]
 
@@ -116,6 +135,12 @@ pa_files["vlc"] = [
 
 pa_files["xmms2"] = [
     ["remuco-xmms2"]
+]
+
+# --- Winamp -------------------------------------------------------------------
+
+pa_files["winamp"] = [
+    ["remuco-winamp", "winamp.py"]
 ]
 
 # =============================================================================
@@ -185,23 +210,14 @@ for pa in player_adapters:
 
 CLIENT_DEST = os.getenv("REMUCO_CLIENT_DEST", "share/remuco/client")
 
-client_from_path = None
-
-if client:
-    if os.path.exists("client/dist/remuco.jar"):
-        client_from_path = "client/dist"
-    elif os.path.exists("client/app/remuco.jar"):
-        client_from_path = "client/app"
-    elif os.path.exists("client/remuco.jar"):
-        client_from_path = "client"
-    else:
-        pass
-        #raise StandardError("client needs to be built first, run: "
-        #                    "ant -f client/build.xml dist")
-
-if client_from_path is not None:
-    data_files.append((CLIENT_DEST, ["%s/remuco.jar" % client_from_path,
-                                     "%s/remuco.jad" % client_from_path]))
+if client and os.path.exists("client/jme/app/remuco.jar"):
+    data_files.append((CLIENT_DEST, ["client/jme/app/remuco.jar",
+                                     "client/jme/app/remuco.jad"]))
+    
+if client and os.path.exists("client/jme/app/no-bluetooth/remuco.jar"):
+    data_files.append(("%s/no-bluetooth" % CLIENT_DEST,
+                       ["client/jme/app/no-bluetooth/remuco.jar",
+                        "client/jme/app/no-bluetooth/remuco.jad"]))
 
 # =============================================================================
 # setup

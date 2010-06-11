@@ -1,7 +1,7 @@
 # =============================================================================
 #
 #    Remuco - A remote control system for media players.
-#    Copyright (C) 2006-2009 by the Remuco team, see AUTHORS.
+#    Copyright (C) 2006-2010 by the Remuco team, see AUTHORS.
 #
 #    This file is part of Remuco.
 #
@@ -42,6 +42,7 @@ FT_CTRL_SHUFFLE = 1 << 17
 FT_CTRL_NEXT = 1 << 18
 FT_CTRL_PREV = 1 << 19
 FT_CTRL_FULLSCREEN = 1 << 20
+FT_CTRL_NAVIGATE = 1 << 21
         
 # --- request features ---
 
