@@ -1,0 +1,793 @@
+#!/usr/bin/python
+
+# =============================================================================
+#
+#    Remuco - A remote control system for media players.
+#    Copyright (C) 2006-2010 by the Remuco team, see AUTHORS.
+#
+#    This file is part of Remuco.
+#
+#    Remuco is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    Remuco is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with Remuco.  If not, see <http://www.gnu.org/licenses/>.
+#
+# =============================================================================
+
+"""XMMS2 adapter for Remuco, implemented as an XMMS2 startup script."""
+
+import os
+
+import gobject
+
+import xmmsclient
+try:
+    from xmmsclient import XMMSValue as X2RV # XMMS2 >= 0.6
+except ImportError: 
+    from xmmsclient import XMMSResult as X2RV # XMMS2 < 0.6 
+import xmmsclient.glib
+import xmmsclient.collections as xc
+
+import remuco
+from remuco import log
+
+# =============================================================================
+# XMMS2 related constants
+# =============================================================================
+
+MINFO_KEYS_ART = ("picture_front", "album_front_large", "album_front_small",
+                  "album_front_thumbnail")
+
+MINFO_KEY_TAGS = "tag"
+MINFO_KEY_RATING = "rating"
+
+BIN_DATA_DIR = "%s/bindata" % xmmsclient.userconfdir_get()
+
+ERROR_DISCONNECTED = "disconnected"
+
+PLAYLIST_ID_ACTIVE = "_active"
+
+SEARCH_MASK = ["Artist", "Title", "Album", "Genre"]
+
+VARIOUS_ARTISTS = "Various Artists"
+BLANK_ARTIST = "[unknown]"
+BLANK_TITLE = "[untitled]"
+
+# =============================================================================
+# actions
+# =============================================================================
+
+IA_JUMP = remuco.ItemAction("Jump to")
+IA_REMOVE = remuco.ItemAction("Remove", multiple=True)
+PLAYLIST_ITEM_ACTIONS = (IA_JUMP, IA_REMOVE)
+
+LA_LOAD = remuco.ListAction("Load")
+MLIB_LIST_ACTIONS = (LA_LOAD,)
+
+IA_APPEND = remuco.ItemAction("Enqueue", multiple=True)
+IA_PLAY_NEXT = remuco.ItemAction("Play next", multiple=True)
+MLIB_ITEM_ACTIONS = (IA_APPEND, IA_PLAY_NEXT)
+
+# =============================================================================
+# helper classes
+# =============================================================================
+
+class ItemListRequest():
+    
+    def __init__(self, reply, pa, path, search=False):
+        """Create a new item list request.
+        
+        @param reply: the request's ListReply object
+        @param pa: XMMS2Adapter
+        @param path: path of the requested item list
+        
+        @keyword search: if True then path is a search query
+        
+        """
+        self.__reply = reply
+        self.__pa = pa
+        self.__path = path
+        
+        self.__pl_ids = []
+        self.__pl_tracks = []
+        
+        x2 = self.__pa._x2
+        
+        roots = [ 'Playlists', 'Collections', 'Albums', 'Artists', 'Tracks' ]
+        
+        if search:
+                
+            self.__reply.item_actions = MLIB_ITEM_ACTIONS
+                
+            match = None
+            
+            for field, value in zip(SEARCH_MASK, path):
+                value = value.strip()
+                if not value:
+                    continue
+                value = "*%s*" % value
+                field = field.lower()
+                match = xc.Match(match, field=field, value=value)
+                
+            if match is None:
+                reply.send()
+            else:
+                x2.coll_query_infos(match, ['artist', 'title', 'id'],
+                                    cb=self.__bil_list_of_tracks)
+            
+        elif not path:
+            
+            self.__reply.nested = roots
+            self.__reply.send()
+        
+        elif path[0] not in roots:
+            
+            log.error("** BUG ** unexpected path: %s" % path)
+        
+        elif len(path) == 1:
+            
+            if path[0] == "Playlists":
+            
+                self.__reply.list_actions = MLIB_LIST_ACTIONS
+                
+                x2.coll_list(path[0], cb=self.__bil_list_of_colls)
+
+            if path[0] == "Collections":
+                
+                x2.coll_list(path[0], cb=self.__bil_list_of_colls)
+                                
+            elif path[0] == "Albums":
+                
+                match = xc.Has(xc.Universe(), 'album')
+                x2.coll_query_infos(match, ['album', 'artist', 'compilation'],
+                                    groupby=['album', 'artist'],
+                                    cb=self.__bil_list_of_albums)
+                
+            elif path[0] == 'Artists':
+                
+                artists = xc.Has(xc.Universe(), 'artist')
+                match = xc.Intersection(xc.Complement(xc.Has(xc.Universe(),
+                                        'compilation')), artists)
+                match = xc.Union(match, xc.Match(artists, field='compilation',
+                                                 value='0'))
+
+                x2.coll_query_infos(match, ['artist'], groupby=['artist'],
+                                    cb=self.__bil_list_of_artists)
+                
+            elif path[0] == 'Tracks':
+                
+                match = xc.Has(xc.Universe(), 'title')
+                x2.coll_query_infos(match, ['title', 'artist', 'id'],
+                                    groupby=['title', 'artist'],
+                                    cb=self.__bil_list_of_tracks)
+        
+        elif len(path) == 2:
+            
+            if path[0] == 'Playlists':
+                
+                if path[1] == PLAYLIST_ID_ACTIVE:
+                    self.__reply.item_actions = PLAYLIST_ITEM_ACTIONS
+                else:
+                    self.__reply.item_actions = MLIB_ITEM_ACTIONS
+                    
+                x2.playlist_list_entries(playlist=path[1],
+                                         cb=self.__handle_pl_ids)
+                
+            elif path[0] == 'Collections':
+                
+                self.__reply.item_actions = MLIB_ITEM_ACTIONS
+                
+                x2.coll_get(path[1], ns="Collections",
+                            cb=self.__handle_collection)
+                
+            elif path[0] == 'Albums':
+                
+                self.__reply.item_actions = MLIB_ITEM_ACTIONS
+                
+                album, artist = path[1].split("\n")
+                
+                if artist == BLANK_ARTIST:
+                    artist = ""
+                elif artist == VARIOUS_ARTISTS:
+                    artist = None
+                
+                match = xc.Match(xc.Universe(), field='album', value=album)
+        
+                if artist is not None:
+                    match = xc.Match(match, field='artist', value=artist)
+        
+                x2.coll_query_infos(match, ['title', 'artist', 'id',
+                                    'compilation', 'tracknr'], order=['tracknr'],
+                                    cb=self.__bil_items_in_album)
+                
+            elif path[0] == 'Artists':
+                
+                self.__reply.item_actions = MLIB_ITEM_ACTIONS
+                
+                match = xc.Match(xc.Universe(), field='artist', value=path[1])
+                x2.coll_query_infos(match, ['title', 'album', 'id',
+                                    'compilation'],
+                                    cb=self.__bil_items_and_albums_of_artist)
+    
+        elif len(path) == 3:
+            
+            if path[0] == 'Artists':
+                
+                self.__reply.item_actions = MLIB_ITEM_ACTIONS
+                
+                match = xc.Match(xc.Universe(), field='artist', value=path[1])
+                match = xc.Match(match, field='album', value=path[2])
+                x2.coll_query_infos(match, ['title', 'id', 'tracknr'],
+                                    order=['tracknr'],
+                                    cb=self.__bil_items_in_album)
+        
+        else:
+        
+            log.error("** BUG ** unexpected path: %s" % path)
+        
+    def __handle_pl_ids(self, result):
+        """Collects track infos for the tracks in the playlist ID list."""
+        
+        if not self.__pa._check_result(result):
+            return
+        
+        self.__pl_ids = result.value()
+        
+        log.debug("playlist ids: %s" % self.__pl_ids)
+        
+        self.__request_next_pl_track()
+        
+    def __request_next_pl_track(self):
+        """Requests track info for the next track in the playlist ID list."""
+        
+        if len(self.__pl_tracks) < len(self.__pl_ids):
+            # proceed in getting item names
+            id = self.__pl_ids[len(self.__pl_tracks)]
+            self.__pa._x2.medialib_get_info(id, cb=self.__handle_pl_track)
+        else:
+            # have all item names
+            self.__bil_list_of_tracks(self.__pl_tracks)
+            
+    def __handle_pl_track(self, result):
+        """Adds a track to the playlist track list and requests the next."""
+        
+        if not self.__pa._check_result(result):
+            return
+
+        self.__pl_tracks.append(result.value())
+        
+        self.__request_next_pl_track()
+        
+    def __handle_collection(self, result):
+        """Requests a track info list for a collection."""
+        
+        if not self.__pa._check_result(result):
+            return
+
+        coll = result.value()
+    
+        self.__pa._x2.coll_query_infos(coll, ['title', 'artist', 'id'],
+                                       cb=self.__bil_list_of_tracks)
+        
+    def __bil_list_of_colls(self, result):
+        """Builds an item list with all collections of a specific namespace."""
+
+        if not self.__pa._check_result(result):
+            return
+
+        colls = result.value()
+        
+        self.__reply.nested = [ i for i in colls if not i.startswith("_") ]
+        self.__reply.send()
+        
+    def __bil_list_of_tracks(self, result):
+        """Builds an item list of a non-specific list of tracks."""
+        
+        if isinstance(result, X2RV):
+            if not self.__pa._check_result(result):
+                return
+            tracks = result.value()
+        else:
+            tracks = result
+    
+        for minfo in tracks:
+
+            self.__reply.ids.append(minfo['id'])
+            self.__reply.names.append(self.__get_item_name(minfo))
+        
+        self.__reply.send()
+            
+    def __bil_list_of_albums(self, result):
+        """Builds an item list of all albums."""
+        
+        if not self.__pa._check_result(result):
+            return
+        
+        albums = set()
+        
+        for x in result.value():
+            if not x['album']:
+                continue
+            elif x['compilation']:
+                albums.add("%s\n%s" % (x['album'], VARIOUS_ARTISTS))
+            else:
+                albums.add("%s\n%s" % (x['album'], x['artist'] or BLANK_ARTIST))
+         
+        self.__reply.nested = sorted(albums)
+        self.__reply.send()
+        
+    def __bil_list_of_artists(self, result):
+        """Builds an item list of all artists."""
+        
+        if not self.__pa._check_result(result):
+            return
+        
+        self.__reply.nested = map(lambda x: x['artist'], result.value())
+        self.__reply.send()
+        
+    def __bil_items_in_album(self, result):
+        """Builds an item list for a specific album."""
+        
+        if not self.__pa._check_result(result):
+            return
+        
+        for minfo in result.value():
+            number = minfo.get('tracknr', 0) and "%s. " % minfo['tracknr'] or ""
+            track = "%s%s" % (number, minfo.get('title', BLANK_TITLE))
+        
+            if minfo.get('compilation', False):
+                track += " / %s" % minfo.get('artist', BLANK_ARTIST)
+        
+            self.__reply.names.append(track)
+            self.__reply.ids.append(minfo['id'])
+        
+        self.__reply.send()
+        
+    def __bil_items_and_albums_of_artist(self, result):
+        """Builds an item list for a specific artist."""
+        
+        if not self.__pa._check_result(result):
+            return
+        
+        albums = set()
+        
+        for minfo in result.value():
+            if not minfo.get('album') or minfo.get('compilation'):
+                name = minfo.get('title', BLANK_TITLE)
+                if minfo.get('album'):
+                    name += " / %s" % minfo['album']
+                self.__reply.names.append(name)
+                self.__reply.ids.append(minfo['id'])
+            else:
+                albums.add(minfo['album'])
+        
+        self.__reply.nested = sorted(albums)
+        self.__reply.send()
+        
+    def __get_item_name(self, minfo, need=None):
+        """Get a standard item name.
+        
+        @param minfo: track info dict
+        @keyword need: list of required tags (artist, title)
+        
+        @return: a name composed of artist and title or None if one the tags
+            in 'need' is None or the empty string
+            
+        """
+        if need and 'title' in need and not minfo.get('title'):
+            return None
+        
+        if need and 'artist' in need and not minfo.get('artist'):
+            return None
+
+        artist = minfo.get('artist', BLANK_ARTIST)
+        title = minfo.get('title', BLANK_TITLE)
+        return "%s / %s" % (title, artist)
+        
+# =============================================================================
+# player adapter
+# =============================================================================
+
+class XMMS2Adapter(remuco.PlayerAdapter):
+    
+    def __init__(self):
+        
+        remuco.PlayerAdapter.__init__(self, "XMMS2",
+                                      max_rating=5,
+                                      shuffle_known=True,
+                                      playback_known=True,
+                                      volume_known=True,
+                                      progress_known=True,
+                                      search_mask=SEARCH_MASK)
+        
+        self.__state_playback = remuco.PLAYBACK_STOP
+        self.__state_volume = 0
+        self.__state_position = 0
+         
+        self.__item_id_int = None # id as integer
+        self.__item_id = None # id as string
+        self.__item_meta = None
+        self.__item_len = 0 # for update_progress()
+        
+        self.__shuffle_off_sid = 0
+        
+        self._x2 = xmmsclient.XMMS("remuco")
+        self.__x2_glib_connector = None
+
+    def start(self):
+        
+        remuco.PlayerAdapter.start(self)
+        
+        try:
+            self._x2.connect(path=os.getenv("XMMS_PATH"),
+                              disconnect_func=self.__notify_disconnect)
+        except IOError, e:
+            raise StandardError("failed to connect to XMMS2: %s" % e)
+        
+        self.__x2_glib_connector = xmmsclient.glib.GLibConnector(self._x2)
+        
+        self._x2.broadcast_playback_current_id(self.__notify_id)
+        self._x2.broadcast_playback_status(self.__notify_playback)
+        self._x2.broadcast_playback_volume_changed(self.__notify_volume)
+        self._x2.broadcast_playlist_current_pos(self.__notify_position)
+        # to dectect all posistion changes:
+        self._x2.broadcast_playlist_changed(self.__notify_playlist_change)
+        self._x2.signal_playback_playtime(self.__notify_progress)
+        
+        # get initial player state (broadcasts only work on changes):
+        self._x2.playback_current_id(cb=self.__notify_id)
+        self._x2.playback_status(cb=self.__notify_playback)
+        self._x2.playback_volume_get(cb=self.__notify_volume)
+        self._x2.playlist_current_pos(cb=self.__notify_position)
+        
+        self.__item_len = 0
+        
+        
+    def stop(self):
+        
+        remuco.PlayerAdapter.stop(self)
+        
+        if self.__shuffle_off_sid > 0:
+            gobject.source_remove(self.__shuffle_off_sid)
+            self.__shuffle_off_sid = 0
+        
+        self._x2 = None
+        self.__x2_glib_connector = None
+        
+    def poll(self):
+        
+        self._x2.playback_playtime(cb=self.__notify_progress)
+        
+    # =========================================================================
+    # control interface 
+    # =========================================================================
+    
+    def ctrl_next(self):
+        
+        self._x2.playlist_set_next_rel(1, cb=self.__ignore_result)
+        self._x2.playback_tickle(cb=self.__ignore_result)
+    
+    def ctrl_previous(self):
+        
+        if self.__state_position > 0:
+            self._x2.playlist_set_next_rel(-1, cb=self.__ignore_result)
+            self._x2.playback_tickle(cb=self.__ignore_result)
+    
+    def ctrl_toggle_playing(self):
+        
+        if (self.__state_playback == remuco.PLAYBACK_STOP or
+            self.__state_playback == remuco.PLAYBACK_PAUSE):
+            self._x2.playback_start(cb=self.__ignore_result)
+        else:
+            self._x2.playback_pause(cb=self.__ignore_result)
+                    
+    def ctrl_toggle_shuffle(self):
+        
+        self._x2.playlist_shuffle(cb=self.__ignore_result)
+        self.update_shuffle(True)
+
+        # emulate shuffle mode: show shuffle state for a second
+        if self.__shuffle_off_sid > 0:
+            gobject.source_remove(self.__shuffle_off_sid)
+        self.__shuffle_off_sid = gobject.timeout_add(1000, self.__shuffle_off)
+        
+    def ctrl_seek(self, direction):
+        
+        self._x2.playback_seek_ms_rel(direction * 5000, cb=self.__ignore_result)
+        
+        self.poll()
+    
+    def ctrl_volume(self, direction):
+        
+        # TODO: currently this fails, problem relates to xmms2 installation
+        
+        if direction == 0:
+            volume = 0
+        else:
+            volume = self.__state_volume + 5 * direction
+            volume = min(volume, 100)
+            volume = max(volume, 0)
+        
+        for chan in ("right", "left"):
+            self._x2.playback_volume_set(chan, volume, cb=self.__ignore_result)
+
+    def ctrl_rate(self, rating):
+        
+        if self.__item_id_int == 0:
+            return
+        
+        self._x2.medialib_property_set(self.__item_id_int, MINFO_KEY_RATING,
+                                       rating, cb=self.__ignore_result)
+             
+    def ctrl_tag(self, id, tags):
+        
+        try:
+            id_int = int(id)
+        except ValueError:
+            log.error("** BUG ** id is not an int")
+            return
+        
+        s = ""
+        for tag in tags:
+            s = "%s,%s" % (s, tag)
+        
+        self._x2.medialib_property_set(id_int, MINFO_KEY_TAGS, s,
+                                       cb=self.__ignore_result)
+    
+    # =========================================================================
+    # actions interface
+    # =========================================================================
+    
+    def action_playlist_item(self, action_id, positions, ids):
+
+        if action_id == IA_JUMP.id:
+            
+            self._x2.playlist_set_next(positions[0], cb=self.__ignore_result)
+            self._x2.playback_tickle(cb=self.__ignore_result)
+            if self.__state_playback != remuco.PLAYBACK_PLAY:
+                self._x2.playback_start(cb=self.__ignore_result)
+                
+        elif action_id == IA_REMOVE.id:
+            
+            positions.sort()
+            positions.reverse()
+            for pos in positions:
+                log.debug("remove %d from playlist" % pos)
+                self._x2.playlist_remove_entry(pos, cb=self.__ignore_result)
+        else:
+            log.error("** BUG ** unexpected playlist item action")
+
+    def action_mlib_item(self, action_id, path, positions, ids):
+        
+        if action_id == IA_APPEND.id:
+            
+            for id in ids:
+                id = int(id)
+                self._x2.playlist_add_id(id, cb=self.__ignore_result)
+                
+        elif action_id == IA_PLAY_NEXT.id:
+            
+            pos = self.__state_position + 1
+            ids.reverse()
+            for id in ids:
+                id = int(id)
+                self._x2.playlist_insert_id(pos, id, cb=self.__ignore_result)
+                
+        else:
+            log.error("** BUG ** unexpected action: %d" % action_id)
+    
+    def action_mlib_list(self, action_id, path):
+
+        if action_id == LA_LOAD.id:
+            
+            if len(path) == 2 and path[0] == "Playlists":
+                self._x2.playlist_load(path[1], cb=self.__ignore_result)
+                self._x2.playlist_set_next(0, cb=self.__ignore_result)
+                self._x2.playback_tickle(cb=self.__ignore_result)
+                if self.__state_playback != remuco.PLAYBACK_PLAY:
+                    self._x2.playback_start(cb=self.__ignore_result)
+            else:
+                log.error("** BUG ** unexpected path: %s" % path)
+                
+        else:
+            log.error("** BUG ** unexpected action: %d" % action_id)
+                
+    def action_search_item(self, action_id, positions, ids):
+        
+        self.action_mlib_item(action_id, None, positions, ids)
+        
+    # =========================================================================
+    # request interface 
+    # =========================================================================
+    
+    def request_playlist(self, reply):
+        
+        ItemListRequest(reply, self, ['Playlists', PLAYLIST_ID_ACTIVE])
+
+    def request_mlib(self, reply, path):
+        
+        ItemListRequest(reply, self, path)
+        
+    def request_search(self, reply, query):
+        
+        ItemListRequest(reply, self, query, search=True)
+    
+    # =========================================================================
+    # internal methods
+    # =========================================================================
+    
+    def _check_result(self, result):
+        """ Check the result of a request sent to XMMS2. """
+        
+        try:
+            ie = result.is_error() # XMMS2 >= 0.6
+        except AttributeError:
+            ie = result.iserror() # XMMS2 < 0.6
+        
+        if not ie:
+            return True
+        
+        err = result.get_error()
+        
+        if err.lower() == ERROR_DISCONNECTED:
+            log.warning("lost connection to XMMS2")
+            self.manager.stop()
+        else:
+            log.warning("error result: %s" % err)
+        
+        return False
+    
+    def __notify_id(self, result):
+        
+        if not self._check_result(result):
+            self.update_item(None, None, None)
+            return
+        
+        self.__item_id_int = result.value()
+        self.__item_id = str(self.__item_id_int)
+        
+        log.debug("new item id: %u" % self.__item_id_int)
+        
+        if self.__item_id_int == 0:
+            self.update_item(None, None, None)
+            return
+
+        self._x2.medialib_get_info(self.__item_id_int, cb=self.__handle_info)
+        
+    def __handle_info(self, result):
+        """Callback to handle meta data requested for the current item.""" 
+        
+        if not self._check_result(result):
+            self.__item_id_int = 0
+            self.__item_id = str(self.__item_id_int)
+            self.update_item(None, None, None)
+            return
+
+        minfo = result.value()
+
+        info = {}
+        info[remuco.INFO_ARTIST] = minfo.get('artist', "")
+        info[remuco.INFO_ALBUM] = minfo.get('album', "")
+        info[remuco.INFO_TITLE] = minfo.get('title', "")
+        info[remuco.INFO_GENRE] = minfo.get('genre', "")
+        info[remuco.INFO_YEAR] = minfo.get('year', "")
+        info[remuco.INFO_BITRATE] = int(minfo.get('bitrate', 0) / 1000)
+        info[remuco.INFO_RATING] = minfo.get(MINFO_KEY_RATING, 0)
+        info[remuco.INFO_TAGS] = minfo.get(MINFO_KEY_TAGS, "")
+    
+        self.__item_len = int(minfo.get('duration', 0) // 1000)
+        info[remuco.INFO_LENGTH] = self.__item_len
+    
+        img = None
+        for img_key in MINFO_KEYS_ART:
+            img = minfo.get(img_key)
+            if img:
+                img = "%s/%s" % (BIN_DATA_DIR, img)
+                break
+        
+        if not img:
+            url = minfo.get('url').replace("+", "%20")
+            img = self.find_image(url)
+        
+        self.update_item(self.__item_id, info, img)
+        
+        self.poll() # update progress
+        
+    def __notify_playback(self, result):
+        
+        if not self._check_result(result):
+            return
+        
+        val = result.value()
+        if val == xmmsclient.PLAYBACK_STATUS_PAUSE:
+            self.__state_playback = remuco.PLAYBACK_PAUSE
+        elif val == xmmsclient.PLAYBACK_STATUS_PLAY:
+            self.__state_playback = remuco.PLAYBACK_PLAY
+        elif val == xmmsclient.PLAYBACK_STATUS_STOP:
+            self.__state_playback = remuco.PLAYBACK_STOP
+        else:
+            log.error("** BUG ** unknown XMMS2 playback status: %d", val)
+            return
+            
+        self.update_playback(self.__state_playback)
+        
+    def __notify_progress(self, result):
+        
+        if not self._check_result(result):
+            return
+        
+        progress = int(result.value() // 1000)
+        progress = min(progress, self.__item_len)
+        progress = max(progress, 0)
+        
+        self.update_progress(progress, self.__item_len)
+          
+    def __notify_volume(self, result):
+        
+        if not self._check_result(result):
+            return
+        
+        val = result.value()
+        volume = 0
+        i = 0
+        for v in val.values():
+            volume += v
+            i += 1
+        volume = volume / i
+        
+        self.__state_volume = volume
+        
+        self.update_volume(self.__state_volume)
+        
+    def __notify_position(self, result):
+                      
+        if not self._check_result(result):
+            return
+        
+        self.__state_position = result.value()['position']
+        
+        self.update_position(self.__state_position)
+    
+    def __notify_playlist_change(self, result):
+        
+        if not self._check_result(result):
+            return
+        
+        # change in playlist may result in position change:
+        self._x2.playlist_current_pos(cb=self.__notify_position)
+    
+    def __notify_disconnect(self, result):
+        
+        log.info("xmms2 disconnected")
+        
+        self.manager.stop()
+    
+    def __ignore_result(self, result):
+        """Handle an XMMS2 result which is not of interest."""
+        
+        self._check_result(result)
+    
+    def __shuffle_off(self):
+        """Timeout callback to disable the pseudo shuffle."""
+        
+        self.update_shuffle(False)
+        self.__shuffle_off_sid = 0
+            
+# =============================================================================
+# main
+# =============================================================================
+
+if __name__ == '__main__':
+    
+    pa = XMMS2Adapter()
+    mg = remuco.Manager(pa)
+    mg.run()
+    
