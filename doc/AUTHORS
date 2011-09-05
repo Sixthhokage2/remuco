@@ -1,0 +1,35 @@
+Authors
+=======
+
+Remuco is written and maintained by Oben Sonne <obensonne@googlemail.com>.
+
+Contributors, listed alphabetically:
+
+ * Igor Almeida
+ * Fabien Carrion
+ * Sayan "Riju" Chakrabarti
+ * James Le Cuirot
+ * Tim Froidcoeur
+ * Florian Hofman
+ * Carlos Eduardo Melo
+ * Kristian "Draco" Nordman
+ * Rajiv Nair
+ * Catalin Patulea
+ * Pawel Szubert
+
+Check the source repository's change log for details.
+
+Thanks
+======
+
+Many thanks to:
+
+ * all contributors, especially those I forgot to mention above
+ * all distribution package maintainers
+ * all users who provided helpful feedback
+
+The Remuco project would not be possible without these other projects:
+
+ * MicroEmulator: http://www.microemu.org/
+ * ProGuard: http://proguard.sourceforge.net/
+ * .. not to mention all used *general* development tools projects

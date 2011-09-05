@@ -1,0 +1,34 @@
+syntax: regexp
+
+# Garbage, temporary and backup files:
+.~$
+install.*\.log$
+^sandbox$
+
+# Build files:
+\.pyc$
+[./]?build/.*$ # all files in 'build' or '*.build' directories
+[./]?dist/.*$ # all files in 'dist' or '*.dist' directories
+[./]?deployed/.*$ # all files in 'deployed' or '*.deployed' directories
+^client/midp/app$
+^client/midp/bin$
+^client/midp/build\.properties$
+^client/midp/wtk-emulator\.properties$
+^client/midp/tools$
+^client/midp/libgen/sources$
+^client/midp/libgen/jar$
+^client/android/local.properties$
+^client/android/bin$
+^client/android/gen$
+
+# IDE files:
+(^|/)\.settings$
+(^|/)\.project$
+(^|/)\.pydevproject$
+(^|/)\.classpath$
+(^|/)\.eclipseme\.tmp$
+(^|/)\.eclipseme$
+
+# misc
+^wiki$
+
