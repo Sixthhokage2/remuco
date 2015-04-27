@@ -1,0 +1,1 @@
+Content has been moved to [MIDP](MIDP.md).

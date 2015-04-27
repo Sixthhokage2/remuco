@@ -1,0 +1,10 @@
+syntax:glob
+.project
+.pydevproject
+images/unused
+*.pyc
+images/screenshots/orig
+images/themes/orig
+ClientDevices.db
+remuco-hg
+Sandbox.py
